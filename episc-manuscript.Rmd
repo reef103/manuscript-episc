@@ -1,0 +1,1469 @@
+---
+title: "EpiSC Manuscript"
+author: "Mariano J. Alvarez"
+date: "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    toc_float: true
+    fig_caption: true
+bibliography: bibliography.bib
+---
+
+```{r configuration, include=FALSE, echo=FALSE}
+
+### Please, edit the three veriables below ###
+repository_dir <- "~/code/manuscripts/manuscript-episc"
+##############################################
+
+```
+
+```{r initializing, include=FALSE, echo=FALSE}
+scripts_dir <- file.path(repository_dir, "code")
+data_dir <- file.path(repository_dir, "data")
+working_dir <- file.path(repository_dir, "results")
+if (!exists(working_dir)) dir.create(working_dir)
+
+# Define the community colors
+community_colors <- c(comm1="#25B34B", comm2="#FFC60B", comm3="#F68B1F", comm4="#00AEEF")
+
+Treatment_colors <- c("Basal media"="#D6D1CA",
+                      "Retinoic acid="="#0097CE",
+                      "SB431542"="#A87BC9",
+                      "BMP4"="#FF7F40",
+                      "WAFB"="#B68150",
+                      "WA"="#007167")
+
+Marker_colors <- c(Pluripotent="#EC297B",
+                   Trophectoderm="#8A1A9B",
+                   Ectoderm="#38D430",
+                   Mesendoderm="#FFD600",
+                   Mesoderm="#F2C6A7",
+                   Endoderm="#7E4015")
+
+# Setting the R library
+#tmp <- .libPaths()
+#tmp[1] <- "~/RlibEpisc"
+#.libPaths(tmp)
+
+library(ViSEAGO)
+library(viper)
+library(umap)
+library(mixtools)
+library(DESeq)
+library(limma)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+library(ggrepel)
+library(gridExtra)
+library(igraph)
+library(GO.db)
+library(ComplexHeatmap)
+library(openxlsx)
+library(ggpubr)
+library(fitdistrplus)
+source(file.path(scripts_dir, "functions.r"))
+
+# Initializing the supplementary files table
+sup_files <- matrix(NA, 0, 2, dimnames=list(NULL, c("File name", "Description")))
+```
+
+```{r setup, include=FALSE, echo=FALSE}
+knitr::opts_chunk$set(fig.align = 'center', fig.dim = c(6, 4), echo=FALSE, cache=TRUE)
+```
+
+# EpiSC context-specific interactome
+
+## Pilot experiment to optimize the perturbational protocol
+
+```{r optimization-data, include=FALSE, echo=FALSE}
+load(file.path(data_dir, "perturbation-optimization.rda"), verbose = TRUE)
+# Remove CM samples
+pos <- which(annot[, "perturbagen"] != "CM")
+annot <- annot[pos, , drop=FALSE]
+d1 <- d1[, pos, drop=FALSE]
+morphogens <- sort(unique(annot[, "morphogen"]))
+morphogens <- morphogens[morphogens != "none"]
+perturbagens <- sort(unique(annot[, "perturbagen"]))
+perturbagens <- perturbagens[!(perturbagens %in% c("none", "CM"))]
+```
+
+A pilot experiment with a subset of conditions, including morphogen and small molecule
+compounds, was performed to optimize the final perturbational protocol.
+This experiment included `r length(morphogens)` morphogen (`r textConcatenate(morphogens)`)
+and `r length(perturbagens)` small molecule compound perturbagens: `r textConcatenate(perturbagens)`.
+The cells were perturbed by different combinations of morphogen and small molecule
+compounds applied at differing times.
+The morphogen perturbation was performed 12h before or after the small molecule compound
+perturbation, such us when cells were profiled, they have been exposed to: (a) only
+the small molecule compounds for 24h, (b) small molecule compounds for 36h and morphogen
+for 24h; and (c) morphogen for 36h and small molecule compound for 24h.
+This dat is available from Gene Expression Omnibus (GEO): [GSE197632](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE197632).
+
+```{r optim-pca}
+# Computing the principal components
+tmp <- prcomp(t(d1), center = TRUE, scale. = TRUE)
+pca <- list(x = t(tmp$x), pvar = tmp$sdev^2/sum(tmp$sdev^2))
+```
+
+To evaluate the effect of the different perturbational protocols on expression profile
+variance, we projected the data based on the first 2 Principal Components (PCA).
+This analysis shows that the variance due to the morphogen is mostly captured by the
+first component (`r round(pca$pvar[1]*100, 1)`% of the variance), while the variance due
+to the small molecule perturbations is mostly captured by the second component
+(`r round(pca$pvar[2]*100, 1)`% of the variance).
+Moreover, addition of the morphogen 12h prior to the small molecule compounds is
+associated with a reduction of the variance due to the compounds.
+However, the variance due to the compounds is retained if the morphogen is added
+12h after the compounds (Fig. \@ref(fig:optim-pca-plot)).
+
+```{r optim-pca-plot, fig.cap="Projection of the pilot experiment's expression data on the first 2 principal components."}
+# Generating the plot
+plotPCApilotPerturbationsGG(pca, annot)
+```
+
+## Perturbational data for the EpiSC context-specific interactome
+
+```{r}
+load(file.path(data_dir, "episc-perturbation.rda"))
+tmp <- paste(episc_samples$Strain, episc_samples$Morphogen, episc_samples$Perturbagen, sep="-x-")
+tmp <- table(tmp)
+treats <- lapply(strsplit(names(tmp), "-x-"), function(x) c(x, rep("", 3-length(x))))
+treats <- do.call(rbind, treats)
+treats <- cbind(treats, tmp)
+treats[treats[, 2]=="", 2] <- "Mock"
+treats[treats[, 3]=="", 3] <- "Vehicle"
+treats <- treats[order(treats[, 1], treats[, 2], treats[, 3]), ]
+```
+
+The transcriptome of `r nrow(episc_samples)` independent EpiSC samples was profiled
+by Illumina BeadArrays (mouse WG-6 v2, Illumina).
+The samples correspond to two EpiSC strains perturbed for 36h with
+`r length(which(unique(treats[, 3]) != "Vehicle"))` distinct small molecule compounds
+or vehicle control, and for 24h with `r length(which(unique(treats[, 2]) != "Mock"))`
+different differentiation morphogens or control culture conditions
+(Table \@ref(tab:episc-perturb-table)).
+
+```{r episc-perturb-table}
+knitr::kable(treats, row.names=FALSE, col.names = c("Strain", "Morphogen", "Compound", "Replicates"),
+             align = "lllc", caption = "List of perturbational conditions for the EpiSC interactome.")
+```
+
+Hybridization data were obtained with an iScan BeadArray scanner (Illumina) and
+pre-processed by variance stabilization and robust spline normalization implemented
+in the lumi package for the R-System [@Du2008].
+Expression data are available from the Gene Expression Omnibus (GEO) database under [GSE197414](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE197414).
+
+Uniform Manifold Approximation and Projection (UMAP) projection of the data in 2D
+is showin in Figure \@ref(fig:umap-episc).
+
+```{r umap-episc, message=FALSE, fig.cap="Two dimensional projection for the EpiSC perturbational dataset based on Uniform Manifold Approximation and Projection (UMAP)."}
+plotExpmatUmapGG(episc_expmat, episc_samples)
+```
+
+## EpiSC context-specific transcriptional interactome
+
+The transcriptional interactome was reverse engineered by the ARACNe algorithm
+[@Basso2005, @Lachmann2016], using 1,478 genes annotated as transcription factors
+(genes annotated in Gene Ontology molecular function database (GO) [@Ashburner2000]
+as GO:0003700, *transcription factor activity*, or as GO:0004677, *DNA binding*,
+and GO:0030528, *transcription regulator activity*, or as GO:0004677 and GO:0045449,
+*regulation of transcription*) as potential regulators and performing 100 bootstrap
+iterations.
+Parameters were set to 0 DPI (data processing inequality) tolerance and MI
+(mutual information) P-value threshold of 10^−8^.
+
+```{r episc-interactome, include=FALSE, echo=FALSE}
+episc_interactome <- readRDS(file.path(data_dir, "EpiSC_interactome.rds"))
+episc_interactome_cleaned<- cleanInteractomeKnownGenes(episc_interactome)
+tfs <- length(episc_interactome_cleaned)
+targets <- length(unique(unlist(lapply(episc_interactome_cleaned,function(x) names(x$tfmode)),use.names=FALSE)))
+interactions <- sum(vapply(episc_interactome_cleaned, function(x) length(x$tfmode), numeric(1)))
+# Exporting the EpiSC interactome
+exportInteractome(episc_interactome, file.path(working_dir, "episc_regulon.tsv"))
+sup_files <- rbind(sup_files, c("episc_regulon.tsv", "EpiSC interactome"))
+exportInteractome(pruneRegulon(episc_interactome, cutoff=50), file.path(working_dir, "episc-50_regulon.tsv"))
+sup_files <- rbind(sup_files, c("episc-50_regulon.tsv", "EpiSC interactome with regulons capped at 50 targets"))
+exportInteractome(episc_interactome_cleaned, file.path(working_dir, "episc_regulon-symbol.tsv"), genesymbol=TRUE)
+```
+
+The resulting interactome represents a regulatory map between `r prettyNum(tfs, big.mark=",")`
+transcription factors and `r prettyNum(targets, big.mark=",")` target genes through
+`r prettyNum(interactions, big.mark=",")` transcriptional interactions.
+
+# Elucidation of Master Regulators of pluripotency and differentiation
+
+## Time-course expression profiles during differentiation
+
+```{r time-course-RNAseq}
+diff_rc <- readRDS(file.path(data_dir, "episc-differentiation_counts.rds"))
+diff_samp <- do.call(rbind, strsplit(colnames(diff_rc), "-"))
+tmp <- sort(as.numeric(sub("H", "", unique(diff_samp[, 2]))))
+time_points <- paste0(tmp, "h")
+diff_arms <- unique(diff_samp[, 1])
+diff_arms <- diff_arms[diff_arms != "Ctrl"]
+```
+
+A time course with `r length(diff_arms)` differentiation arms was performed, with
+RNA-Seq expression profile performed in EpiSC-5 cells at `r textConcatenate(time_points)`
+after treatment (Table \@ref(tab:diff-timecourse-table)).
+
+```{r diff-timecourse-table}
+tmp <- timeCourseTreatmentMatrix(diff_samp)
+knitr::kable(tmp, row.names=FALSE, col.names = colnames(tmp),
+             align = "lcc", caption = "List of differentiation experiment conditions and replicates.")
+```
+
+RNA-Seq data was generated according to Illumina TruSeq protocol in a HiSeq 2000
+instrument (Illumina) at the Columbia Sulzberger Genome Center.
+Sequencing data was mapped to the mouse genome MGSCv37 (mm9) with TopHat v1.3.3 [@Trapnell2009].
+Reads mapping to known genes, based on Entrez gene identifiers, were then counted
+using the GenomicFeatures R-system package (Bioconductor [@Gentleman2004]).
+Summarized expression data resulting from these analyses are available from GEO database
+[GSE199114](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE199114),
+consisting in a raw-counts expression matrix of `r prettyNum(nrow(diff_rc), big.mark=",")`
+known genes by `r ncol(diff_rc)` samples.
+
+We computed a size factor for each sample using the median log-ratio method and
+identified as outliers the samples showing residuals from a linear fit of the
+computed size factors vs. sequencing depth (total number of mapped reads) greater
+than 50% (Fig. \@ref(fig:depth-size-factor)).
+
+```{r depth-size-factor, fig.cap="Scatter-plot showing the computed size factors vs. the sequencing depth for each sample. Samples with residuals greater than 50% were identified as outliers (highlighted in red)."}
+outliers <- plotDepthvsSizeFactor(diff_rc, outlier=50)
+```
+
+`r length(outliers)` samples identified in this way as outliers, including
+`r textConcatenate(outliers)`, were not considered for further analysis.
+
+```{r remove-outiers}
+pos <- which(colnames(diff_rc) %in% outliers)
+diff_rc <- diff_rc[, -pos, drop=FALSE]
+diff_samp <- diff_samp[-pos, , drop=FALSE]
+```
+
+Expression data were then normalized by equivariance transformation, based on the
+negative binomial distribution with the DESeq R-system package [@Anders2010].
+
+```{r normalization}
+diff_expmat <- DEtransform(diff_rc)
+colnames(diff_expmat) <- vapply(strsplit(colnames(diff_expmat), "-"), function(x) paste(x[-length(x)], collapse="-"), character(1))
+exportDiffExpmat(diff_expmat, file.path(working_dir, "Differentiation_expmat.tsv"))
+sup_files <- rbind(sup_files, c("Differentiation_expmat.tsv.gz", "Differentiation experiment normalized expression matrix"))
+```
+
+```{r Diff-pca}
+# Computing the gene expression signatures
+diff_ges <- apply(diff_expmat, 2, function(x, ref) {
+  x-ref
+}, ref=rowMeans(diff_expmat[, colnames(diff_expmat) == "Ctrl-0H"], na.rm=TRUE))
+# PCA
+tmp <- prcomp(t(diff_ges), center = FALSE, scale. = FALSE)
+tmp1 <- t(tmp$x)
+tmp1[1, ] <- -tmp1[1, ]
+pca <- list(x = tmp1, pvar = tmp$sdev^2/sum(tmp$sdev^2))
+```
+
+Projection of the normalized expression data in 2 dimensions was obtained with PCA.
+The projection on the first component, capturing `r round(pca$pvar[1]*100, 1)`% of
+data variance, was mainly related to the differentiation time-point, while the second
+component, capturing `r round(pca$pvar[2]*100, 1)`% of data variance mainly separated
+the differentiation protocols (Fig. \@ref(fig:Diff-pca-plot)).
+
+```{r Diff-pca-plot, fig.cap="Projection of the differentiation experiment gene expression data in 2 dimensions by PCA."}
+plotPCAdiffTimeCourse(pca)
+```
+
+The expression likelihood for each gene was estimated by fitting a mixture of three
+gaussian distributions to the distribution of log_10_(RPKM+1) across all genes.
+For this, the raw-counts across all replicates for the control EpiSC samples were
+aggregated and log_10_(RPKM+1) computed.
+A mixture of Gaussian models was fitted to the distribution of the EpiSC RPKM profile
+with the mixtools package [@Benaglia2009] (Fig. \@ref(fig:expression-likelihood)).
+The expression likelihood for each gene was estimated as 1 minus the relative likelihood
+for an observation, expressed as RPKM, to be derived from the the first (lowest mean)
+distribution.
+
+```{r expression-likelihood, results='hide', message=FALSE, fig.cap = "Distribution density for the EpiSC mRNA expression (RPKM, solid grey) and 3 gaussian models fitted to it."}
+pos <- which(diff_samp[, 1]=="Ctrl")
+# Aggregating the raw-counts for the controls
+rc <- matrix(rowSums(diff_rc[, pos]), nrow(diff_rc), 1, dimnames=list(rownames(diff_rc), "EpiSC"))
+# Computing the RPKM for the aggregated control data
+episc_rpkm <- rpkm(rc, offset=1, genome=file.path(data_dir, "mm10.rda"))
+# Fitting 3 gaussian mix
+set.seed(1)
+fit <- mixGaussianFit(episc_rpkm, min=3, max=3, adj=c(.8, 2))
+par(mai=c(.8, .8, .2, .2))
+{
+  plot(fit, episc_rpkm, xlab="log(FPKM)", ylab="Probability density",
+       fitCol=c("darkred", "darkgreen", "darkblue"))
+  legend("topright", paste0(c("LogLikelihood: ", "MSE: "),
+                            signif(unlist(fit[4:5], use.names=FALSE), 2)), bty="n")
+}
+# Computing expression likelihood
+expression_likelihood <- 1-predict(fit, episc_rpkm[, 1], 1)[, 1]
+```
+
+## Inference of Master Regulators of plutipotency and differentiation
+
+Gene expression signatures were computed for each differentiation arm and time point
+by comparing the corresponding gene expression profile replicates against the EpiSC-5
+profiles (time-zero control) using Student t-test.
+Protein activity signatures were then estimated using the `msviper` function from
+the VIPER package available from Bioconductor [@Alvarez2016].
+Normalized Enrichment Score (NES) and p-values were estimated by permuting the sample
+labels uniformly at random 1,000 times.
+For the time points with *n* < 5 replicates, the closest *k* = 5 - *n* samples from
+contiguous time points, based on the similarity between gene expression signatures,
+were borrowed in order to provide enough samples for the permutation-based estimation
+of NES and p-values.
+
+```{r Diff-msVIPER, eval=FALSE}
+set.seed(1)
+diff_vp <- viperEpiSCdiff(diff_expmat, regul=episc_interactome)
+```
+
+```{r Diff-msVIPER-precomputed}
+diff_vp <- readRDS(file.path(data_dir, "episc-differentiation-vipermat.rds"))
+exportDiffVPmat(diff_vp, file.path(working_dir, "Differentiation_vpmat.tsv"))
+sup_files <- rbind(sup_files, c("Differentiation_vpmat.tsv.gz", "Differentiation experiment viper matrix"))
+```
+
+Examination of the temporal trajectories for the first 3 principal components of
+the protein activity results revealed a potential technical issue with the 18h
+time-point for the SB31542 (Fig. \@ref(fig:PCA-trajectories)).
+As it is shown by PC2, the 18h time-point for this treatment arm is potentially
+an outlier and we decided to ignore this time point for the
+SB31542 treatment for all further analysis.
+
+```{r PCA-trajecories, out.width='50%', fig.show='hold', fig.cap="Temporal trajectories for the first 3 principal components of the protein activity signatures for each of the treatments, and 2-dimensional projection of the protein activity signatures based on PCA."}
+plotPCAtrajectory(diff_vp, treat="RA", main="Retinoic acid", cex.main=.9)
+plotPCAtrajectory(diff_vp, treat="SB", main="SB431542", cex.main=.9)
+plotPCAtrajectory(diff_vp, treat="B4", main="BMP4", cex.main=.9)
+plotPCAtrajectory(diff_vp, treat="Meso", main="Mesoderm", cex.main=.9)
+plotPCAtrajectory(diff_vp, treat="Endo", main="Endoderm", cex.main=.9)
+pcplot(diff_vp, getPositionsFromString(colnames(diff_vp, "-", 1)))
+```
+
+Examples of transcriptional regulators inactivated, non-affected and activated during differentiation are shown below:
+
+```{r fig.dim=c(8.6, 1.7)}
+diff_ges_integrated <- differentiationSignature(diff_expmat)
+diff_ges_integrated <- diff_ges_integrated[, colnames(diff_ges_integrated) != "SB-18"]
+exportDiffVPmat(diff_ges_integrated, file.path(working_dir, "Differentiation_ges.tsv"))
+sup_files <- rbind(sup_files, c("Differentiation_ges.tsv.gz", "Differentiation experiment gene expression signatures"))
+genes <- list(down=c("Dnmt3b", "Bcl11a", "Otx2"), mid=c("Hoxd9", "Morc1", "Dmrtb1"), up=c("Zfand3", "Id1", "Rarb"))
+plotHeatmapGroups(diff_vp[, colnames(diff_vp) != "SB-18", drop=FALSE], genes=genes[[1]])
+```
+
+```{r plot-inactivated-mrs, fig.dim=c(8.6, 1.2), fig.show='hold', fig.cap="Enrichment plot for the transcriptional targets of 5 selected regulators, inactivated during differentiation, on the 72h gene expression signatures for each differentiation treatment."}
+plotEnrichmentGroups(diff_ges_integrated, pruneRegulon(episc_interactome, 200), genes=genes[[1]])
+```
+
+```{r fig.dim=c(8.6, 1.7)}
+plotHeatmapGroups(diff_vp[, colnames(diff_vp) != "SB-18", drop=FALSE], genes=genes[[2]])
+```
+
+```{r plot-notchanged-mrs, fig.dim=c(8.6, 1.2), fig.show='hold', fig.cap="Enrichment plot for the transcriptional targets of 5 selected regulators, not affected during differentiation, on the 72h gene expression signatures for each differentiation treatment."}
+plotEnrichmentGroups(diff_ges_integrated, pruneRegulon(episc_interactome, 200), genes=genes[[2]])
+```
+
+```{r fig.dim=c(8.6, 1.7)}
+plotHeatmapGroups(diff_vp[, colnames(diff_vp) != "SB-18", drop=FALSE], genes=genes[[3]])
+```
+
+```{r plot-activated-mrs, fig.dim=c(8.6, 1.2), fig.show='hold', fig.cap="Enrichment plot for the transcriptional targets of 5 selected regulators, activated during differentiation, on the 72h gene expression signatures for each differentiation treatment."}
+plotEnrichmentGroups(diff_ges_integrated, pruneRegulon(episc_interactome, 200), genes=genes[[3]])
+```
+
+```{r GES-table}
+ges_table <- tibble::tibble(EntrezID=rownames(diff_ges_integrated),
+                            Symbol=diff_ges_integrated %>% rownames %>% entrez2gene,
+                            RPKM=episc_rpkm[match(rownames(diff_ges_integrated), rownames(episc_rpkm)), ] %>% round(2),
+                            Expression=expression_likelihood[match(rownames(diff_ges_integrated), names(expression_likelihood))] %>% round(3))
+ges_z <- integrateEpiSCviperZ(diff_ges_integrated[, colnames(diff_ges_integrated) != "SB-18"])
+ges_p <- integrateEpiSCviperP(diff_ges_integrated[, colnames(diff_ges_integrated) != "SB-18"])
+ges_table <- ges_table %>% dplyr::bind_cols(tibble::as_tibble(diff_ges_integrated[, colnames(diff_ges_integrated) != "SB-18", drop=FALSE] %>% round(3)), tibble::tibble(Zscore=round(ges_z, 2), p.value=signif(ges_p, 3), FDR=ges_p %>% p.adjust("fdr") %>% signif(3), Bonferroni=ges_p %>% p.adjust("bonferroni") %>% signif(3)))
+ges_table <- ges_table %>% dplyr::arrange(p.value)
+ofile <- gzfile(file.path(working_dir, "GES-results-table.tsv.gz"), open="wt")
+write.table(ges_table, file=ofile, quote=FALSE, sep="\t", row.names=FALSE, col.names=TRUE)
+close(ofile)
+sup_files <- rbind(sup_files, c("GES-results-table.tsv.gz", "Table of gene expression signatures for the differentiation experiment"))
+```
+
+
+P-values for protein differential activity were estimated based on the NES.
+To account for proteins that could be activated in response to a differentiation
+arm but inhibited in response to other, p-values were integrated using the Fisher’s method.
+Based on the 2-dimensional projection of the protein activity signatures using
+PCA, and the PCA trajectories, we decided to not consider the treatment with SB431542
+for 18h when computing the integrated p-value.
+To compensate for a potentially redundant contribution of mesoderm and endoderm
+differentiation arms---which showed a strong correlation at the protein activity
+level--their contribution was down-weighted by half while performing Fisher’s
+integration of the p-values.
+
+```{r Integrated-z-p}
+viper_z <- integrateEpiSCviperZ(diff_vp[, colnames(diff_vp) != "SB-18"])
+viper_p <- integrateEpiSCviperP(diff_vp[, colnames(diff_vp) != "SB-18"])
+```
+
+```{r selected-candidates}
+genes <- names(viper_p)
+res_table <- data.frame(EntrezID=genes, Symbol=entrez2gene(genes), RPKM=round(episc_rpkm[match(genes, rownames(episc_rpkm)), ], 2), Expression=round(expression_likelihood[match(genes, names(expression_likelihood))], 3), round(diff_vp[match(genes, rownames(diff_vp)), , drop=FALSE][, colnames(diff_vp) != "SB-18", drop=FALSE], 2), "Zscore"=round(viper_z, 2), "p.value"=signif(viper_p, 3), FDR=signif(p.adjust(viper_p, "fdr"), 3), Bonferroni=signif(p.adjust(viper_p, "bonferroni"), 3))
+res_table[is.na(res_table)] <- 0
+res_table <- res_table[order(-as.numeric(res_table$Expression>.5), res_table$p.value), ]
+incell_genes <- readLines(file.path(data_dir, "incell.txt"))
+plateseq_genes <- readLines(file.path(data_dir, "plateseq.txt"))
+non_mr <- readLines(file.path(data_dir, "nonmr.txt"))
+res_table$Incell <- res_table$EntrezID %in% incell_genes
+res_table$PLATEseq <- res_table$EntrezID %in% plateseq_genes
+write.table(res_table, file=file.path(working_dir, "viper-results-table-selected.tsv"), quote=FALSE, sep="\t", row.names=FALSE, col.names=TRUE)
+sup_files <- rbind(sup_files, c("viper-results-table-selected.tsv", "Table of viper analysis results for the differentiation experiment"))
+```
+
+```{r table-selected-220}
+mr_candidates <- getCandidatesInfo()
+genes <- mr_candidates[, 1]
+pos <- match(genes, names(viper_z))
+mr_table <- data.frame(EntrezID=genes, Symbol=entrez2gene(genes), RPKM=round(episc_rpkm[match(genes, rownames(episc_rpkm)), ], 2), Expression=round(expression_likelihood[match(genes, names(expression_likelihood))], 3), "Z-score"=round(viper_z[pos], 2), "p-value"=signif(viper_p[pos], 3), FDR=signif(p.adjust(viper_p[pos], "fdr"), 3), Bonferroni=signif(p.adjust(viper_p[pos], "bonferroni"), 3), Rank=rank(viper_p)[pos], "MR"=mr_candidates[, 2]=="MR", Incell=genes %in% incell_genes, PLATEseq=genes %in% plateseq_genes)
+mr_table <- mr_table[order(-as.numeric(mr_table$MR), mr_table$Rank, -mr_table$Expression), ]
+mr_first_selection <- which(diff(mr_table$Rank)>1)[1]
+mr_last_selection <- round(max(mr_table$Rank[mr_table$MR])/100)*100
+mr_rank <- mr_table$Rank
+mr_rank[is.na(mr_rank)] <- max(mr_table$Rank, na.rm=TRUE)+seq_len(length(which(is.na(mr_rank))))
+```
+
+
+Candidate MRs were selected for validation based on the following steps:
+
+1. Top `r mr_first_selection` most differentially active proteins.
+2. `r length(which(mr_table$MR)) - mr_first_selection` proteins were selected
+uniformly at random, from the proteins ranked between positions `r mr_first_selection + 1`
+and `r mr_last_selection` based on differential protein activity (see Table below).
+3. Finally, `r length(which(!mr_table$MR))` previously known pluripotency
+regulators--not identified among the top `r mr_last_selection` MRs, either because
+they ranked lower in the prioritized list
+(n = `r length(which(!mr_table$MR & !is.na(mr_table$Rank)))`), or they were not
+represented as a transcriptional regulator in our EpiSC inetractome
+(n = `r length(which(is.na(mr_table$Rank)))`)--were also added to the list of
+candidate MRs.
+4. From the resulting `r nrow(mr_table)` genes, only `r length(which(mr_table$Expression>.5))`
+were expressed in EpiSC (likelihood > 0.5). Since validation efforts will be based on
+the use of genetic perturbations to knock-down the expression of candidate MRs, only
+candidates expressed in EpiSC cells will be considered.
+
+From `r length(which(mr_table$Expression>.5))` expressed MR candidates, we included
+`r length(which(mr_table$PLATEseq))` for the validation effort using **PLATE-Seq** (see below).
+This includes all the top `r length(which(mr_table$PLATEseq & mr_rank <= mr_first_selection))`
+most differentially active transcriptional regulators that are expressed in EpiSC cells,
+an additional subset of `r length(which(mr_table$PLATEseq & mr_rank > mr_first_selection & mr_table$MR))`
+proteins, selected at random from the top `r mr_last_selection` most differentially
+active proteins--for a total of `r length(which(mr_table$PLATEseq & mr_table$MR))`
+candidate MRs--and a set of `r length(which(mr_table$PLATEseq & !mr_table$MR))` known
+pluripotency regulators, which were not represented among the top `r mr_last_selection`
+candidate MRs in our integrated results.
+
+A total of `r length(which(mr_table$Incell))` proteins were selected for validation
+with the **Incell** assay (see section below).
+To the genes selected for validation by PLATE-Seq we added
+`r length(which(mr_table$Incell & !mr_table$PLATEseq & mr_table$MR))` additional proteins
+selected at random from the top `r mr_last_selection` candidate MRs, and
+`r length(which(mr_table$Incell & !mr_table$PLATEseq & !mr_table$MR))` additional
+proteins known to be involved in pluripotency but not identified among the `r mr_last_selection`
+most differentially active regulators by our approach.
+
+Below is a heatmap for the `r length(which(mr_table$MR & mr_table$Incell))` candidate
+MR proteins selected for validation (Fig. \@ref(fig:heatmap-selected-validation)).
+
+```{r heatmap-selected-validation, fig.dim=c(8, 20), fig.cap="Heatmap showing the activity for the selected candidate MRs, sorted by unsupervised hierarchical clustering. Candidate MRs selected for PLATE-seq validation are indicating by an arrow in the right margin."}
+try(plotHeatmapCandidateViper(diff_vp[, colnames(diff_vp) != "SB-18", drop=FALSE], mr_table$EntrezID[mr_table$MR & mr_table$Incell], mr_table$EntrezID[mr_table$MR & mr_table$PLATEseq]))
+```
+
+The following table lists all the `r nrow(mr_table)` selected proteins, including the
+`r length(which(mr_table$Expression > .5))` proteins expressed in EpiSC, the
+`r length(which(mr_table$Incell))` proteins selected for validation using the Incell-based
+quantification of Pou5f1 protein levels (see section below), and the
+`r length(which(mr_table$PLATEseq))` proteins selected for validation using
+expression profile by PLATE-Seq technology (Table \@ref(tab:selected-prteins-table)).
+
+```{r selected-proteins-table, messages=FALSE, warning=FALSE}
+# Save results table
+tmp <- as.matrix(mr_table)
+tmp[is.na(tmp)] <- ""
+write.table(tmp, file=file.path(working_dir, "mr-candidates-table.tsv"), quote=FALSE, sep="\t", col.names=TRUE, row.names=FALSE)
+sup_files <- rbind(sup_files, c("mr-candidates-table.tsv", "Table of candidate MR proteins results"))
+# Display table
+knitr::kable(tmp, row.names=FALSE, col.names=colnames(tmp), align="llcccccccccc", caption="Selected proteins for validation. The table includes the EntrezID, Symbol, Expression level (RPKM), Expression likelihood, integrated differential protein activity expressed as z-score and p-value, False Discovery Rate (FDR) and Bonferroni's corrected p-value, its rank based on differential activity during differentiation, whether the protein was selected as a candidate MR or included because it has been previously descrived as a regulator of pluripotency, and whether the protein has been selected for validation using Pou5f1 protein level quantification by Incell analysis or expression profile by PLATE-seq analysis.")
+```
+
+
+
+# Expression profile of EpiSC cells after shRNA-mediated silencing of candidate MRs
+
+We profiled the transcriptome of EpiSC cells at 72h after lentivirus-mediated
+silencing of candidate MRs.
+Expression profiles were obtained by PLATE-Seq [@Bush2017].
+Sequencing reads were de-multiplexed as previously described by Bush et.al [@Bush2017],
+mapped to the mouse genome build GRCm38 (mm10) and counted at the known gene level
+with the STAR aligner [@Dobin2013].
+Summarized expression data resulting from these analyses are available from GEO
+[GSExx]().
+
+```{r load-plateseq}
+load(file.path(data_dir, "episc-plateseq-silencing.rda"))
+pos <- colSums(plateseq_rc, na.rm=TRUE)<2e5
+lowcount <- plateseq_md[pos, , drop=FALSE][, seq_len(2), drop=FALSE]
+lowcount[, 1] <- entrez2gene(lowcount[, 1])
+lowcount <- paste(lowcount[, 1], lowcount[, 2], sep="-")
+plateseq_rc <- plateseq_rc[, !pos, drop=FALSE]
+plateseq_md <- plateseq_md[!pos, , drop=FALSE]
+```
+
+The expression profile includes `r prettyNum(nrow(plateseq_rc), big.mark=",")` known
+genes (EntrezID) and `r ncol(plateseq_rc)` samples, including
+`r length(which(plateseq_md[, 1] %in% c("Mock", "NT")))` controls, and
+`r length(unique(plateseq_md[!(plateseq_md[, 1] %in% c("Mock", "NT")), 2]))` shRNA clones
+targeting `r length(unique(plateseq_md[!(plateseq_md[, 1] %in% c("Mock", "NT")), 1]))` genes.
+We eliminated `r length(lowcount)` samples that were sequenced at extremely low depth
+(total mapped reads < 2 x 10^5^), including `r textConcatenate(lowcount)`.
+
+Below is a table listing all conditions for the silencing PLATE-seq experiment
+(Table \@ref(tab:plateseq-table)).
+
+```{r plateseq-table}
+tmp <- plateseqSamplesTable(plateseq_md)
+knitr::kable(tmp, row.names=FALSE, col.names=colnames(tmp), align="llllr", caption="List of treatments for the PLATE-Seq assay, including silenced genes and shRNA clones.")
+```
+
+Expression data were then normalized by equivariance transformation, based on the
+negative binomial distribution with the DESeq R-system package [@Anders2010].
+
+```{r plateseq-norm}
+plateseq_expmat <- DEtransform(rnaseqQNorm(plateseq_rc, plateseq_rc[, plateseq_md[, 1] %in% c("Mock", "NT")]))
+colnames(plateseq_expmat) <- apply(plateseq_md, 1, paste, collapse="-")
+plateseq_expmat <- plateseq_expmat[, -grep("Across", colnames(plateseq_expmat)), drop=FALSE]
+exportDiffVPmat(plateseq_expmat, file.path(working_dir, "Plateseq_expmat.tsv"))
+sup_files <- rbind(sup_files, c("Plateseq_expmat.tsv.gz", "PLATE-Seq silencing experiment normalized expression data"))
+```
+
+Differential gene expression signatures were computed for each candidate MR-targeting
+shRNA clone using plate(batch)-matching non-target controls as reference.
+Statistical significance was estimated with a moderated Student t-test implemented
+in the limma package from Bioconductor [@Ritchie2015] and gene expression signatures
+for each shRNA clone expressed as z-scores.
+
+```{r plateseq-ges}
+plateseq_ges <- plateseqGES(plateseq_expmat)
+exportDiffVPmat(plateseq_ges, file.path(working_dir, "Plateseq_ges.tsv"))
+sup_files <- rbind(sup_files, c("Plateseq_ges.tsv.gz", "PLATE-Seq silencing experiment gene expression signatures"))
+```
+
+Differential protein activity was estimated for each shRNA-mediated knock-down
+experiment by the VIPER algorithm with the EpiSC interactome.
+To control for differences in the regulon size (number of transcriptional targets
+per regulon), all regulons were capped to an effective size of 50 by selecting the
+transcriptional targets with highest likelihood such as sum(likelihood^2^) <= 50.
+
+```{r plateseq-viper}
+plateseq_vp <- aREA(plateseq_ges, pruneRegulon(episc_interactome, cutoff=50), cores=3)$nes
+```
+
+
+## Identification of inverted regulons 
+
+We used the knock-down results to identify the regulons most likely reporting the
+inverted direction of protein change.
+For this, we used the multiple shRNA clones targeting each candidate MR to estimate
+the z-score of protein activity change in response to the targeted gene knock-down.
+While we expect the silencing should be reflected in a decrease in protein activity,
+because some regulons might represent an inversion of the regulatory program [@Alvarez2016],
+a small fraction might be inferred as an increase in protein activity.
+Thus, we fitted a mixture of gaussian distributions to the empirical distribution of
+the previously estimated z-scores, and estimated a conservative threshold for identifying
+inverted regulons, as the z-score corresponding to a likelihood ratio of 4 between the
+fitted gaussians for inverted and non-inverted regulons, respectively (Fig. \@ref(fig:inverted-regulon-likelihood)).
+
+```{r inverted-regulon-likelihood, results='hide',  out.width='45%', fig.show='hold', fig.cap="(Left panel) Distribution density for the reduction in protein activity (z-score) for the silenced proteins (grey), and fitted Gaussian models. The inverted triangle indicates the Z-score sorresponding to a likelihood ratio of 4. (Right panel) Scatter-plot showing the likelihood of inversion vs. the integrated differential activity for each of the candidate MRs."}
+# Estimate inversion
+inversion_rl <- invertedRegulonLikelihood(plateseq_vp, plot=TRUE)
+#diff_vp_sc <- viperMatrixCorrectSign(diff_vp, inversion_rl)
+# Correct direction in plateseq viper matrix
+plateseq_vp_sc <- viperMatrixCorrectSign(plateseq_vp, inversion_rl)
+exportDiffVPmat(plateseq_vp_sc, file.path(working_dir, "Plateseq_vpmat.tsv"))
+sup_files <- rbind(sup_files, c("Plateseq_vpmat.tsv.gz", "PLATE-Seq silencing experiment viper matrix"))
+# Compute differentiation viper matrix using top 50 targets
+diff_vp_50 <- aREA(diff_ges_integrated[, colnames(diff_ges_integrated) != "SB-18"], pruneRegulon(episc_interactome, cutoff=50), cores=3)$nes
+# Stouffer integration
+viper_z_50 <- integrateEpiSCviperZ(diff_vp_50)
+# Correct differentiation viper matrix direction
+diff_vp_50_sc <- viperMatrixCorrectSign(diff_vp_50, inversion_rl)
+# Correct integrated differentiation viper signature
+viper_z_50_sc <- viperMatrixCorrectSign(viper_z_50, inversion_rl)
+
+plot(viper_z_50[match(names(inversion_rl), names(viper_z_50))], log2(inversion_rl), col=hsv(0, 0, 0, .5), pch=20, cex=.6, xlab="Differential protein activity (z-score)", ylab="Regulon inversion likelihood ratio (log2)")
+abline(h=0, col="grey")
+abline(h=log2(.25), col="grey", lty=3)
+```
+
+We found `r length(which(inversion_rl<.25))` of the `r length(inversion_rl)` genes
+that were targeted by at least 2 shRNA clones
+(`r round(100*length(which(inversion_rl<.25))/length(inversion_rl), 1)`%) with a
+likelihood ratio $\geq$ 4, for which we considered the sign of the original regulon
+to be inverted.
+
+
+## Recapitulation of the differentiation protein activity signatures by the candidate MR silencing: Differentiation signature validation score 
+
+Recapitulation of the changes at the protein activity level, observed during the
+differentiation time-course, by the shRNA-mediated knock-down of the candidate MR
+genes, was evaluated by computing the enrichment of the top 100 most differentially
+active transcriptional regulators, for the 72h time-point of the lineage specific
+differentiation experiment (Table \@ref(tab:top100MR)), on the shRNA-mediated knock-down
+protein activity signatures.
+For this, the protein activity signatures of differentiation were estimated using
+the regulons capped to an effective size $\leq$ 50 (see example in Fig. \@ref(fig:enrichment-diff-plateseq)).
+
+```{r top100MR}
+reg_diff <- apply(diff_vp_50[rownames(diff_vp_50) %in% rownames(plateseq_vp), , drop=FALSE][, grep("-72", colnames(diff_vp_50)), drop=FALSE], 2, function(x) {
+    tfmode <- sign(x[order(abs(x), decreasing=TRUE)[1:100]])
+    list(tfmode=tfmode, likelihood=rep(1, length(tfmode)))
+})
+tmp <- vapply(reg_diff, function(x, inverted) {
+  x <- x[["tfmode"]]
+  pos <- which(names(x) %in% inverted)
+  if (length(pos)>0)
+    x[pos] <- -x[pos]
+  names(x) <- entrez2gene(names(x))
+  res <- paste0(names(x), " (", c("-", "+")[as.numeric(x>0)+1], ")")
+  res[order(x, names(x))]
+}, character(100), inverted=names(inversion_rl)[inversion_rl < .25])
+knitr::kable(tmp, row.names=FALSE, col.names=acro2lineage(getPositionsFromString(colnames(tmp), "-", 1)[, 1]), caption="Top 100 most differentially active proteins per differentiation trajectory at 72h. Activation (+) or inactivation (-) during differentiation is indicated in the table.")
+```
+
+```{r enrichment-diff-plateseq, fig.dim=c(12, 3), fig.cap="Enrichment plot for the top 100 most differentially active transcriptional regulators, for the 72h time-point of the lineage specific differentiation experiment (vertical lines showing proteins activated during differentiation in red and inactivated in blue), on the shRNA-mediated knock-down protein activity signatures for 3 shRNA clones targeting Utf1 (x-axis, with proteins rank-sorted from the most inactivated (left) to the most activated (right). The numbers to the rightof the enrichment plots indicate the NES estimated by the aREA algorithm."}
+nes_plateseq_diff <- aREA(plateseq_vp, reg_diff)$nes
+plotDifferentiationEnrichment(plateseq_vp, reg_diff, gene="Utf1")
+```
+
+Enrichment scores were integrated across the `r length(diff_arms)` differentiation
+paths by a weighted implementation of the Stouffer's method, with endoderm and mesoderm
+having half the contribution of the other lineages.
+Integrated z-scores per gene were estimated with a weighted implementation of the
+Stouffer's method.
+The strength of each shRNA clone to decrease the activity of the targeted protein,
+expressed as z-score, was used to weight the contribution of the corresponding shRNA clone.
+The differentiation signature scores were multiplied by the sign of the MR protein
+activity change during the integration, ensuring that concordant changes would be
+reflected by scores > 0 while discordant changes by scores < 0.
+
+```{r enrichment-diff-plateseq-integration}
+diff_score <- differentiationScore(nes_plateseq_diff, plateseq_vp_sc)
+diff_val_score <- differentiationScore(nes_plateseq_diff, plateseq_vp_sc, diff_vp_50_sc)
+```
+
+```{r save-differentiation-score-table}
+differentiationScoreTable(nes_plateseq_diff, plateseq_vp_sc, diff_vp_50_sc)
+sup_files <- rbind(sup_files, c("Differentiation-score-table.xlsx", "Table of differentiation scores for each differentiation path and shRNA clone"))
+```
+
+```{r save-differentiation-score-tables, eval=FALSE}
+differentiationScoreTables(nes_plateseq_diff, plateseq_vp_sc)
+sup_files <- rbind(sup_files, c("Differentiation-shRNA.tsv.gz", "Table of differentiation scores for each differentiation path and shRNA clone"))
+sup_files <- rbind(sup_files, c("Differentiation-integrated-shRNA.tsv.gz", "Table of differentiation scores for each shRNA clone after integrating across differentiation paths"))
+sup_files <- rbind(sup_files, c("Differentiation-integrated-gene.tsv.gz", "Table of differentiation scores for each differentiation path after integrating across shRNA clones"))
+sup_files <- rbind(sup_files, c("Differentiation-score.tsv.gz", "Table of differentiation scores for each gene after integrating across differentiation paths and shRNA clones"))
+```
+
+Figure \@ref(fig:enrichment-diff-plot) shows the distribution density for the integrated
+effect of each candidate MR silencing on the differentiation protein activity signature
+(black line), and the distribution density when such effect is corrected by the direction
+of change of the silenced candidate MR during differentiation (red line).
+
+```{r enrichment-diff-plot, out.width='60%', fig.show='hold', fig.cap="Differentiation signature validation score. Distribution density for the enrichment of the protein activity signature induced by silencing each candidate MR and the differentiation signature (black), as well as the validation score obtained by taking into accoung the MRs inferred to be activated during differentiation (red)."}
+par(mai=c(.8, .8, .2, .2))
+plot(density(diff_val_score), lwd=2, xlab="Diff. signature enrichment score", axes=FALSE, type="n", main="")
+lines(density(diff_score), lwd=2)
+lines(density(diff_val_score), lwd=2, col="red")
+axis(1)
+axis(2)
+```
+
+
+
+# Analysis of Pou5f1 immunofluorescence data
+
+```{r Incell-analysis}
+# Load Incell data
+incell <- readRDS(file.path(data_dir, "incell-primary-screen.rds"))
+# Table of incell results
+incell_tab <- incellTable(incell)
+# Remove outliers
+incell <- incellRemoveOutliers(incell)
+incell_outliers <- sum(incell_tab$Cells) - length(unlist(incell, use.names=FALSE))
+# Normalization based on plate-centric controls
+incell_norm <- incellNorm(incell)
+# Z-score
+incell_z <- incellZscore(incell_norm)
+```
+
+Immunofluorescence intensity quantification for Pou5f1 was obtained for each identified
+cell with an InCell automatic microscope.
+The data was acquired in `r length(incell)` plates (batches), each plate assaying a
+subset of the MR-directed shRNA clones and corresponding negative controls.
+We acquired data for a total of `r prettyNum(sum(incell_tab$Cells), big.mark=",")`
+individual cells, `r prettyNum(sum(incell_tab$Cells[incell_tab$Type=="Ctrl"]), big.mark=",")`
+corresponding to control conditions,
+`r prettyNum(sum(incell_tab$Cells[incell_tab$Type=="MR"]), big.mark=",")` cells
+transduced with candidate MR-targeting shRNA hairpins, and
+`r prettyNum(sum(incell_tab$Cells[incell_tab$Type=="POS"]), big.mark=",")` cells
+transduced with shRNA clones targeting known pluripotency regulators, for a total of
+`r length(which(incell_tab$Type=="MR"))` hairpins targeting
+`r length(unique(as.vector(incell_tab$Target[incell_tab$Type=="MR"])))` candidate MR
+genes, and `r length(which(incell_tab$Type=="POS"))` hairpins targeting
+`r length(unique(as.vector(incell_tab$Target[incell_tab$Type=="POS"])))` known
+pluripotency regulators (Fig. \@ref(fig:shrna-clones-genes)).
+
+```{r shrna-clones-genes, out.width='60%', fig.cap="Histogram showing the number of genes represented by different number of shRNA clones."}
+tmp <- as.data.frame(table(as.vector(incell_tab$Target)[incell_tab$Type != "Ctrl"]))
+tmp$Freq <- paste0(tmp$Freq, " clones")
+tmp$Freq[tmp$Freq=="1 clones"] <- "1 clon"
+ggplot(tmp, aes(x=Freq)) + geom_bar() + theme_classic(base_size = 16) + labs(x="", y="Number of genes") +
+  theme(axis.text.x = element_text(angle = 70, hjust=1))
+```
+
+Data points (cells) with values higher than 6 inter-quartile range (IQR) units above
+the median of the control conditions were considered outliers and removed from further analysis.
+This step eliminated `r prettyNum(incell_outliers, big.mark=",")` outlier cells,
+representing `r round(100 * incell_outliers / sum(incell_tab$Cells), 2)`% of the data points.
+
+The data were then normalized independently for each plate using the plate-specific
+control conditions.
+A cumulative empirical density distribution was computed for the control conditions
+of each plate and used to estimate the normalized scores (z-scores) for each data point.
+This procedure eliminated any systematic difference (batch effect) between plates based
+on the control conditions.
+Figure \@ref(fig:plot-violin-incell) shows the distribution for different wells of 2
+plates before and after normalization.
+
+```{r plot-violin-incell, out.width='45%', fig.show='hold', fig.cap="Distribution for the raw and normalized fluorescence for two InCell plates."}
+{
+  par(mai=c(1, 2.5, .5, .2))
+  plotIncellViolin(incell[[1]], xlab="Raw fluorescense units", main="Plate #1", cex.main=.9)
+  plotIncellViolin(incell[[2]], xlab="Raw fluorescense units", main="Plate #2", cex.main=.9)
+  plotIncellViolin(incell_norm[[1]], xlab="Normalized fluorescense units", main="Plate #1", cex.main=.9)
+  plotIncellViolin(incell_norm[[2]], xlab="Normalized fluorescense units", main="Plate #2", cex.main=.9)
+}  
+```
+
+Data were summarized per assayed well by computing the area over the cumulative
+empirical distribution across all data points (cells) per well, and the statistical
+significance for the differential Pou5f1 protein level were estimated by comparing
+the available summarized replicates per hairpin vs. the summarized replicates for
+the control wells with the Student t-test.
+Figure \@ref(fig:plot-incell-hairpin) shows the distribution for the z-scores at
+the shRNA clone level, including the fit of a mixture of 3 Gaussian models used to
+estimate the proportion of hairpins inducing a decrease in Pou5f1 protein levels (red),
+no change (green), and increased levels (purple).
+
+```{r plot-incell-hairpin, message=FALSE, results='hide', out.width='60%', fig.cap="Distribution density for the differential Pou5f1 protein level (z-score) in response to candidate MR-targeting shRNA clones. The color lines indicate Gaussian models fitted to the data, and the numbers indicate the proportion of shRNA clones fitted by each model."}
+set.seed(1)
+plotGaussianFit(incell_z, 3, 3, xlab="Pou5f1 differential levels (z-score)")
+```
+
+Integrated z-scores per gene were estimated by integrating the effect of the shRNA
+clones with a weighted implementation of the Stouffer's method, using the strength
+of each hairpin to reduce the inferred activity of the targeted protein as weight.
+Figure \@ref(fig:incell-z-plot) shows the Pou5f1 differential protein levels (z-score),
+as the distribution density (left panel) and a waterfall plot (right panel).
+
+```{r integration-incell}
+incell_integ <- integrateshRNAclones(incell_z, proteinActivityCis(plateseq_vp_sc), c(-2, -2))
+```
+
+```{r incell-z-plot, results='hide', out.width='45%', fig.show='hold', fig.cap="Differential Pou5f1 protein activity in response to candidate MR silecing. (Left panel) Distribution density for the differential Pou5f1 protein levels in response to MR candidates silencing. (Right panel) Waterfall plot for Pou5f1 differential protein levels in response to candidate MR silencing. The horizontal dotted lines indicate the statistical significance thresholds at FDR < 0.05."}
+par(mai=c(.8, .8, .2, .2))
+set.seed(1)
+plotGaussianFit(incell_integ, xlab="Pou5f1 protein level (z-score)", cex.main=.9)
+waterfallPlot(incell_integ, pval=.05, genes=c("Pou5f1", "Zmym1", "Zc3h13", "Otx2", "Rrn3", "Peg3", "Cbl", "Sox2", "Tada2a", "Stat3", "Tcfl5", "Zfand3"))
+```
+
+Table \@ref(tab:incell-summary-table) shows a summary of results for the Incell-based
+quantification of Pou5f1 protein levels after MR candidate silencing.
+
+```{r incell-summary-table}
+tmp <- cbind(as.matrix(incell_tab), "Pou5f1-clone"=round(incell_z[match(rownames(incell_tab), names(incell_z))], 4), "Pou5f1-gene"=rep("", nrow(incell_tab)))
+tmp[match(names(incell_integ), getPositionsFromString(rownames(tmp), "-", 1)[, 1]), 6] <- round(incell_integ, 4)
+tmp[is.na(tmp)] <- ""
+write.table(tmp, file=file.path(working_dir, "Pou5f1-Incell.tsv"), quote=FALSE, sep="\t", row.names=FALSE, col.names=TRUE)
+sup_files <- rbind(sup_files, c("Pou5f1-Incell.tsv", "Table of results for the Pou5f1 protein levels quantified by Incell"))
+tmp[, "Cells"] <- prettyNum(as.numeric(tmp[, "Cells"]), big.mark=",")
+knitr::kable(tmp, row.names=FALSE, col.names=colnames(tmp), align="cllrcc", caption="List of Pou5f1 immunofluorescence incell experiment conditions, including shRNA clones, control conditions and number of cells recorded per condition, as well as Pou5f1 differential protein levels (z-score) per shRNA clone and integrated per gene. MR: candidate MR gene; POS: known pluripotency regulator not identified as a candidate MR.")
+```
+
+
+
+# Differentiation score and Pou5f1 protein levels
+
+Figure \@ref(fig:diff-Pou5f1-score) shows the relationship between the changes in
+Pou5f1 protein level (Pou5f1 protein score, x-axis) and the validation scores based
+on the protein activity signatures observed during differentiation (Differentiation score, y-axis).
+These validation scores were obtained by multiplying the corresponding differentiation
+score and Pou5f1 protein levels, obtained in response to silencing the candidate MRs
+expression, and the inferred protein activity change for the candidate MR quantified
+during the induction of differentiation to different lineages.
+
+Table \@ref(tab:validation-table) lists the inferred differential activity during
+differentiation and the validation results for the candidate pluripotency regulators
+evaluated with lost-of-function assays.
+
+```{r diff-Pou5f1-score, fig.cap="Pou5f1 validation score vs Differentiation score."}
+incell_score <- incell_integ * sign(viper_z_50_sc[match(names(incell_integ), names(viper_z_50_sc))])
+plotPou5f1vsDiffScoreRotated(incell_score, diff_val_score, genes=c("Zfp518b", "Bach2", "Pou3f1", "Cbl", "Tada2a", "Irf6", "Zpr1", "Zmat4", "Zfp207", "Phf5a", "Zc3h13", "Rrn3", "Rexo4", "Peg3", "Zfp239", "Zfp579", "Rarb", "Tal2", "Hes6", "Utf1", "Jazf1", "Mkx"))
+```
+
+```{r validation-table}
+val_table <- MRtable(rpkm=episc_rpkm[, 1], exp_lh=expression_likelihood, regulon=names(episc_interactome), inversion_lr=inversion_rl, msviper_vp=diff_vp, viper_vp=diff_vp_50, incell_sc=incell_score, diff_sc=diff_val_score)
+# Save the results
+write.table(val_table, file=file.path(working_dir, "Validation_table.tsv"), quote=FALSE, sep="\t", row.names=FALSE, col.names=TRUE)
+sup_files <- rbind(sup_files, c("Validation_table.tsv", "Table of validation results"))
+# Include table
+knitr::kable(val_table, row.names=FALSE, col.names = colnames(val_table),
+  align = paste0("ll", paste(rep("c", ncol(val_table)-2), collapse="")),
+  caption = "List of validated master regulators and their results on loss-of-function analysis.")
+```
+
+# Assembly of a candidate MR-focused interactome based on perturbational data and shRNA-mediated knock-down experimental data {#mr-focused-interactome}
+
+We decided to better define the transcriptional targets for each of the candidate
+MRs by incorporating the expression profile data in response to their silencing.
+For this, we performed the following steps:
+
+1. Estimate the silencing efficiency for each candidate MR by integrating the effect
+of the shRNA clones on targeted gene transcript abundance and on the coding protein
+VIPER-inferred activity.
+2. Compute mutual information(MI) for all the targets in the network based on the
+original perturbational data using ARACNe.
+3. Compute differential gene expression (DE) after each MR silencing.
+4. Correct direction of regulons in the network based on silencing experiment results.
+5. Quantile-transform the vectors of MI and DE to generate the corresponding scores (MIS and DES).
+6. Compute an integrated score for each putative target gene for each regulator.
+This is performed by integrating the MI values for the targets present in the ARACNe
+regulon with the DE values for all the profiled transcripts. In this way, MI significance
+and data processing inequality (DPI) filtering are still taken into consideration.
+	1. The contribution of DE scores is weighted by the silencing efficiency score.
+	2. Two integration scores are computed:
+		1. Non-directional score (NDS): MIS | abs(DES)
+		2. Directional score (DS): MIS x sign(TFmode) | DES
+	3. The integration scores NDS and DS are then integrated on a way that is proportional
+	to the TF-mode:
+	   IS = DS x abs(TFmode) + DSI x (1 - abs(TFmode))
+	4. The integrated TFmode of the regulon is computed as the mean of the original TFmode
+	and DES, where the contrinbution of DES is weighted by the silencing efficiency score
+	5. The integrated likelihood is simply the scaled IS
+7. Take top 200 targets per regulon.
+8. Prune regulons to an effective size of 50.
+
+The silencing efficiency was estimated as the Stouffer's integration of silenced gene
+differential expression and protein activity across all targeting shRNA clones.
+Both differential expression and protein activity values were scaled by their variance
+across all data points, prior to the integration, to account for potentially different
+dynamic range between these variables.
+
+```{r Silencing efficiency}
+sief <- silencingEfficiency(proteinActivityCis(plateseq_ges), proteinActivityCis(plateseq_vp))
+```
+
+```{r silencing-based-interactome}
+silencing_interactome <- silencingInteractome(regul=episc_interactome, inv_lr=inversion_rl, ps_ges=plateseq_ges, ps_vp_cis=proteinActivityCis(plateseq_vp_sc), sief=sief)
+# Saving the interactome
+exportInteractome(silencing_interactome, file.path(working_dir, "episc-silencing_regulon.tsv"))
+sup_files <- rbind(sup_files, c("episc_silencing_regulon.tsv", "EpiSC interactome based on silencing experiments"))
+exportInteractome(pruneRegulon(silencing_interactome, cutoff=50), file.path(working_dir, "episc_silencing-50_regulon.tsv"))
+sup_files <- rbind(sup_files, c("episc_silencing-50_regulon.tsv", "EpiSC interactome based on silencing experiments capped to 50 targets"))
+exportInteractome(pruneRegulon(silencing_interactome, cutoff=50), file.path(working_dir, "episc_silencing-50_regulon-symbol.tsv"), genesymbol=TRUE)
+```
+
+We found a strong correlation for protein activity inferences, in the differentiation
+experiment, between the original (ARACNe-only) and the regulator silencing-based
+interactomes (Fig. \@ref(fig:interactome-comparison)).
+
+```{r interactome-comparison, fig.cap="Protein activity for the differentiation signatures inferred using the original (ARACNe-only) and the regulator silencing-based interactome."}
+diff_vp_newint <- aREA(diff_ges_integrated[, colnames(diff_ges_integrated) != "SB-18"], pruneRegulon(silencing_interactome, cutoff=50), cores=3)$nes
+scatterPlotVPcomparison(diff_vp_50_sc, diff_vp_newint, xlab="Original ARACNe-based interactome", ylab="Silencing-curated interactome")
+```
+
+Figure \@ref(fig:regulons-comparison) shows the similarity in VIPER inferences, expressed
+as Pearson's correlation coefficient, for each of the regulons in the interactomes.
+
+```{r regulons-comparison, fig.dim=c(26, 5), fig.cap="Barplot showing the correlation in protein activity inferences, for each regulon,  between the original (ARACNe only-based) and the curated (ARACNe + silencing) interactomes."}
+barplotVPcomparison(diff_vp_50_sc, diff_vp_newint)
+```
+
+
+# Regulatory interactions between the pluripotency regulators
+
+## Effect of MR silencing on other MRs protein acticity
+
+```{r plateseq-viper-curated}
+plateseq_vp_curated <- aREA(plateseq_ges, pruneRegulon(silencing_interactome, cutoff=50), cores=3)$nes
+plateseq_vp_curated_cis <- proteinActivityCis(plateseq_vp_curated)
+plateseq_vp_integ <- integrateshRNAclones(plateseq_vp_curated, plateseq_vp_curated_cis, sig=c(-2, -2))
+```
+
+```{r plateseq_viper-curated-order-filter}
+diff_val_pval <- p.adjust(pnorm(diff_val_score, lower.tail=FALSE)*2, "fdr")
+plateseq_vp_integ <- plateseq_vp_integ[, order(colMeans(abs(plateseq_vp_integ)), decreasing=TRUE), drop=FALSE]
+plateseq_vp_integ <- plateseq_vp_integ[match(colnames(plateseq_vp_integ), rownames(plateseq_vp_integ)), , drop=FALSE]
+genes <- names(diff_val_pval)[diff_val_pval < .05]
+ps_vp_integ <- plateseq_vp_integ[rownames(plateseq_vp_integ) %in% genes, , drop=FALSE][, colnames(plateseq_vp_integ) %in% genes, drop=FALSE]
+exportTablePsVpInteg(ps_vp_integ)
+sup_files <- rbind(sup_files, c("MR_crosstalk.tsv.gz", "Table of MR cross-talk (z-score), with silencing experiments in columns and MR activity in rows"))
+sup_files <- rbind(sup_files, c("MR_crosstalk_log10FDR.tsv.gz", "Table of MR cross-talk (FDR), with silencing experiments in columns and MR activity in rows"))
+```
+
+We used VIPER to estimate the change in activity for each of the `r length(genes)` validated
+pluripotency regulators in response to each shRNA-mediated knock-down profiled by PLATESeq.
+VIPER analysis was performed using the experimentally curated interactome.
+VIPER-inferred activity (NES) for the shRNA clones targeting the same gene were integrated
+using a weighted implementation of the Stouffer's method.
+The strength of each shRNA clone to decrease the activity of the targeted protein,
+expressed as z-score, was used to weight the contribution of the corresponding data-point.
+
+```{r activated-mrs}
+act_mrs <- sort(rowMeans(ps_vp_integ), decreasing=TRUE)
+act_mrs <- entrez2gene(names(act_mrs)[act_mrs>1.5])
+```
+
+Most MRs were inactivated by the silencing of other MRs, with exception of a few MRs,
+including `r textConcatenate(act_mrs)`, whose activity increased in response to other MRs
+silencing (Fig. \@ref(fig:heatmap-mr-effect)).
+
+```{r heatmap-mr-effect, fig.dim=c(28, 28), fig.cap="Heatmap showing the effect of silencing each of the 132 MR proteins (columns) on the activity of the 132 MR proteins (rows). The matrix was sorted based on the strength of the silencing on the expression of the 132 MRs."}
+try(heatmapMReffect(ps_vp_integ))
+```
+
+
+## Assembling a functional MRs directed network
+
+A directed network was assembled by considering, for each MR~*k*~, all MR~*i*~ proteins,
+with *i* $\neq$ *k*, showing a significant change in activity in response to the shRNA-mediated
+knock-down of MR~*k*~, as downstream nodes connected by outgoing edges from MR~*k*~.
+Optimization of the statistical threshold to define an edge was performed by evaluating
+the relationship between the number of nodes (proteins) and edges at different thresholds
+(Fig. \@ref(fig:MR-network-optimization)).
+Based on this analysis, we decided to infer an edge between a silenced regulator P~*r*~ and
+a downstream protein P~*t*~ when the activity of P~*t*~ significantly changes in
+response to P~*r*~ silencing (FDR < 10^-10^).
+
+```{r MR-network}
+ntw <- perturbationNetwork(ps_vp_integ, pval=1e-10, method="fdr")
+```
+
+This network represents `r prettyNum(length(E(ntw)), big.mark=",")` directed regulatory
+interactions between `r length(V(ntw))` regulatory proteins.
+
+```{r MR-network-optimization, results='hide', warning=FALSE, fig.dim=c(12, 3), fig.cap="Scatter-plots showing the number of proteins and edges represented in the network when different statistical thresholds are used to define an edge."}
+networkOptimizationFigure(ps_vp_integ, c(10000, 5000, 2000), "nodes")
+```
+
+
+## Degree centrality
+
+We calculated the degree, in-degree, out-degree and betweenness for each of the
+`r length(V(ntw))` regulatory proteins, as well as the regularized out- and in-degree,
+estimated as the out-degree multiplied by the difference between out- and in-degree
+scaled between 0 and 1, and as the in-degree multiplied by the difference between
+in- and out-degree scaled between 0 and 1, respectively.
+
+The barplots and heatmap below show the degree, out-degree, in-degree, regulatized
+out-degree, regularized in-degree, and betweenness for each of the `r length(V(ntw))`
+master regulator proteins included in the network (Figs. \@ref(fig:barplot-degree)
+and \@ref(fig:heatmap-degree)).
+
+```{r degree-analysis}
+degree_tbl <- degreeTable(ntw)
+```
+
+```{r barplot-degree, fig.dim=c(16, 25), fig.cap="Barplots showing the degree analysis for the MR network."}
+tmp <- barplotDegree(ntw)
+grid.arrange(tmp[["Degree"]],
+             tmp[["Out-degree"]],
+             tmp[["In-degree"]],
+             tmp[["Reg_out-degree"]],
+             tmp[["Reg_in-degree"]],
+             tmp[["Betweenness"]], ncol=6)
+```
+
+```{r heatmap-degree, fig.dim=c(25, 4), fig.cap="Heatmap showing the degree analysis for the MR networks."}
+try(heatmapDegree(ntw))
+```
+
+As expected, we observed a weak but positive correlation between the estimated silencing
+efficiency for each MR protein, and the average change in protein activity on the other
+MR proteins (left panel below), the network out-degree (center-left panel, below),
+the network regularized out-degree (center-right panel, below), and the network 
+betweenness (right panel, below) (Fig. \@ref(fig:scatter-corr-degree)).
+
+```{r scatter-corr-degree, fig.dim=c(18, 4), fig.cap="Correlation between the silencing efficiency and the average effect on the activity of the other MR proteins (left panel), the network out-degree (center-left panel), the network regularized out-degree (center-right panel), and the network betweenness (right panel)."}
+tmp <- scatterDegreeSief(ps_vp_integ, ntw, sief)
+grid.arrange(tmp[[1]], tmp[[2]], tmp[[3]], tmp[[4]], ncol=4)
+```
+
+Analysis for the distribution of the regularized out-degree identified at least 3
+potential categories of MR proteins: speakers, communicators and listeners
+(Figs. \@ref(fig:reg-out-degree) and \@ref(fig:reg-out-degree-label)).
+
+```{r reg-out-degree, message=FALSE, results='hide', out.width='45%', show='hold', fig.cap="Distribution density for the regularized out-degree and mixture of gaussian distributions fitted to it."}
+speaker_cat <- fitRegOutDegree(degree_tbl)
+```
+
+```{r reg-out-degree-label, message=FALSE, results='hide', out.width='45%', show='hold', fig.cap="Distribution density for the regularized out-degree indicating the MRs identified as Speakers."}
+fitRegOutDegreePlot(degree_tbl)
+```
+
+The betweenness data was best fited to a geometric distribution, and we used this fit to
+identify potential outliers with high betweenness that we call "mediators"
+(Figs. \@ref(fig:reg-betweenness) and \@ref(fig:reg-betweenness-label),  and Table \@ref(tab:btw-geom-fit-pval)).
+
+```{r reg-betweenness, message=FALSE, results='hide', out.width='45%', show='hold', fig.cap="Scatter-plot for the empirical (y-axis) and theoretical (x-axis) quantiles estimated by fitting a geometric distribution to the betweenness data."}
+fit_btw <- fitBetweenness(degree_tbl)
+integrator_cat <- p.adjust(fit_btw$pval, "fdr")<.05
+fit_btw$plot
+```
+
+```{r btw-geom-fit-pval}
+tmp <- btwPvalTable(degree_tbl, fit_btw$pval)
+knitr::kable(tmp, row.names=FALSE, col.names = colnames(tmp),
+             align = "lccc", caption = "Betweeneess p-value and FDR estimated from a geometric distribution fit.")
+```
+
+```{r reg-betweenness-label, message=FALSE, results='hide', out.width='45%', show='hold', fig.cap="Distribution density for betweenness indicating the MRs identified as Integrators."}
+fitBetweennessPlot(degree_tbl, thr=btwThr(degree_tbl, fit_btw$pval, adjust="fdr", pthr=.05))
+```
+
+```{r speaker-silencing}
+tmp <- aov(sief~cat, data=data.frame(cat=speaker_cat, sief=sief[match(names(speaker_cat), names(sief))]))
+aov_pval <- anova(tmp)[[5]][1]
+```
+
+We found no association between the categories of MR proteins and the silencing efficiency
+(p = `r signif(aov_pval, 3)`, Fig. \@ref(fig:violin-out-degree)).
+
+```{r violin-out-degree, message=FALSE, results='hide', out.width='45%', show='hold', fig.cap="Violin plot for the distribution of silencing efficiency among communicator, listener, speaker categories"}
+par(mai=c(1.2, .8, .5, .1))
+tmp <- c("Listener", "Communicator", "Speaker")[speaker_cat]
+names(tmp) <- names(speaker_cat)
+violinCommunities(sief[match(names(speaker_cat), names(sief))], tmp, ylab="Silencing efficiency", xlab="", pch=20, pt.cex=.5, pt.disp=.8, sep=.001)
+```
+
+
+## Community analysis for the pluripotency MR network
+
+Community analysis was performed with the Louvain multi-level modularity optimization
+algorithm [@Blondel2008], as implemented in the igraph package from Bioconductor.
+
+```{r modularity}
+com_membership <- episcCommunityAnalysis(ntw)
+# Modularity
+modul <- igraph::modularity(as.undirected(ntw), com_membership)
+# Community Stability by FET analysis 
+all_stbl <- allCommunityStabilityFET(ntw)
+stbFET <- communityStabilityFET(ntw)
+```
+
+The Louvain algorithm maximized the modularity by splitting the MR proteins in
+`r length(unique(com_membership))` communities.
+We estimated a score for each protein *i* as member of a community by estimating
+the statistical significance for the overlap between all proteins *k* interacting
+with protein *i* and the proteins assigned to each of the communities.
+The significance for the overlap was estimated by the Fisher's Exact Test (FET)
+(Fig. \@ref(fig:heatmap-commun-member)).
+
+The table below shows the results for this analysis:
+
+```{r heatmap-commun-member, fig.dim=c(4, 26), fig.cap="Heatmap showing the membership score for each community as -log~10~(FDR) (green), and the community stability score (red). The numbers on the right side indicates the community membership."}
+try(heatmapCommStbl(ntw, com_membership))
+```
+
+
+We observed positive correlation between the community score and the average effect
+in protein activity after silencing the protein, the degree, the regularized out-degree,
+and the integrator score (network centrality, betweenness) (Fig. \@ref(fig:stbl-score-plots)).
+
+```{r stbl-score-plots, fig.dim=c(25, 4), fig.cap="Scatter-plots showing the relationship between the community score and the silencing efficiency (first plot from left to right), average protein activity change in response to silecing the MR (second plot from left to right), degree (third plot from left to right), regularized out-degree (second plot from right), and network centrality (betweenness, rightmost plot)."}
+res <- list()
+res[["sief"]] <- scatterPlotCorrelation(sief, stbFET, method="spearman", xlab="Silencing efficiency", ylab="Community score", match_names=TRUE)
+tmp <- ps_vp_integ
+diag(tmp) <- NA
+res[["pact"]] <- scatterPlotCorrelation(colMeans(abs(tmp), na.rm=TRUE), stbFET, method="spearman", xlab="Average protein activity", ylab="Community score", match_names=TRUE)
+res[["degree"]] <- scatterPlotCorrelation(degree_tbl[, "Degree"], stbFET, method="spearman", xlab="Degree", ylab="Community score", match_names=TRUE)
+res[["rod"]] <- scatterPlotCorrelation(degree_tbl[, "Reg_out-degree"], stbFET, method="spearman", xlab="Regularized out-degree", ylab="Community score", match_names=TRUE)
+res[["btw"]] <- scatterPlotCorrelation(log2(degree_tbl[, "Betweenness"]+1), stbFET, method="spearman", xlab=expression(log[2](Betweenness+1)), ylab="Community score", match_names=TRUE)
+grid.arrange(res[[1]], res[[2]], res[[3]], res[[4]], res[[5]], ncol=5)
+```
+
+
+The violin plots below show the distribution of different network parameters, including the regularized out-degree, betweenness and degree for each of the communities (Fig. \@ref(fig:violin-community-test-FDR).
+
+```{r violin-community-test-FDR, warning=FALSE, message=FALSE, fig.dim=c(12, 4), fig.cap="Distribution of network parameters, including regularized out-degree (A), betweenness (B) and degree (C) for ech of the communities."}
+pos <- which(stbFET>2)
+p1 <- violinCommunitiesTest(degree_tbl[, "Reg_out-degree"][pos], com_membership[pos], community_colors,
+                      ylab="Regularized out-degree", xlab="Community")
+p2 <- violinCommunitiesTest(log2(degree_tbl[, "Betweenness"][pos]+1), com_membership[pos],
+                      community_colors, ylab=expression(log[2](Betweenness+1)), xlab="Community")
+p3 <- violinCommunitiesTest(degree_tbl[, "Degree"][pos], com_membership[pos], community_colors, ylab="Degree", xlab="Community")
+fig <- ggarrange(p1, p2, p3, nrow=1, labels="AUTO")
+fig
+```
+
+Table \@ref(tab:table-network-parameters) lists the network parameters:
+
+```{r table-network-parameters}
+ntw_params <- tableNtwParams(degree_tbl, com_membership, stbFET, sief, speaker_cat)
+write.table(ntw_params, file=file.path(working_dir, "Network-table.tsv"), quote=FALSE, sep="\t", row.names=FALSE, col.names=TRUE)
+knitr::kable(ntw_params, row.names=FALSE, col.names=colnames(ntw_params), align="llccccccccc",
+  caption = "Table of Network parameters.")
+```
+
+```{r strong-nodes}
+n_strong_nodes <- length(V(induced_subgraph(ntw, names(stbFET[stbFET>2])))$name)
+```
+
+Figures \@ref(fig:Network-plot-umap) and \@ref(fig:Network-plot-umap-betweenness) show the graphs for the `r length(V(ntw)$name)` nodes.
+
+Figures \@ref(fig:Network-plot-umap-score2) and \@ref(fig:Network-plot-umap-score2-betweenness) show the graphs for the `r n_strong_nodes` nodes with a significant association (FDR < 0.01) to a community.
+
+```{r Network-plot-umap, eval=TRUE, fig.dim=c(10, 10), fig.cap="Graphical representation for the MR network where nodes (MRs) were layed-out based on network connectivity, using an UMAP projection of the network connectivity matrix based on the Jaccard's distance. Node size is proportional to the regularized out-degree. The node color represent the different communities. Intra-community edges are shown in black and inter-community edges in grey."}
+ntw1 <-ntw
+vname <- V(ntw1)$name
+V(ntw1)$name <- entrez2gene(V(ntw1)$name)
+set.seed(1)
+layout <- umapLayout(ntw, k=13)
+cmn <- cluster_louvain(as.undirected(ntw1))
+dgt <- dgt_full <- degreeTable(ntw1)
+v_size <- sqrt(dgt[, "Reg_out-degree"])
+v_size_offsetOD <- max(v_size)/5
+v_size <- v_size+v_size_offsetOD
+v_size_fOD <- 20/max(v_size)
+v_size <- v_size*v_size_fOD
+V(ntw1)$size <- v_size
+V(ntw1)$label.dist <- as.numeric(v_size<4)*.5
+V(ntw1)$label.cex=.8
+V(ntw1)$label.family="Helvetica"
+col <- community_colors[igraph::membership(cmn)]
+col[vname %in% names(stbFET[stbFET<=2])] <- "#CCCCCC"
+V(ntw1)$color <- col
+crosscom <- igraph::crossing(cmn, ntw1)
+tmp <- do.call(rbind, strsplit(names(crosscom), "\\|"))
+tmp <- apply(tmp, 2, function(x, genes) x %in% genes, genes=entrez2gene(names(stbFET[stbFET<2])))
+crosscom <- crosscom | (rowSums(tmp)>0)
+E(ntw1)$width <- ifelse(crosscom, .2, .4)
+E(ntw1)$color <- ifelse(crosscom, "grey70", "black")
+{
+  plot(ntw1, layout=layout, rescale=TRUE, edge.arrow.size=.1)
+    legend("bottomleft", paste0("Community ", c(seq_len(4), "-")), pch=21, pt.bg=c(community_colors, "#CCCCCC"), pt.cex=1.8, bty="n", cex=1)
+}
+cmn1 <- igraph::membership(cmn)
+cmn1[col=="#CCCCCC"] <- 0
+igraph::vertex_attr(ntw1, "community") <- cmn1
+exportCytoscape(ntw1, layout, filename="graph-all-outdegree")
+```
+
+```{r Network-plot-umap-betweenness, eval=TRUE, fig.dim=c(10, 10), fig.cap="Graphical representation for the MR network where nodes (MRs) were layed-out based on network connectivity, using an UMAP projection of the network connectivity matrix based on the Jaccard's distance. Node size is proportional to the network centrality (betweenness). The node color represent the different communities. Intra-community edges are shown in black and inter-community edges in grey."}
+ntw1 <-ntw
+vname <- V(ntw1)$name
+V(ntw1)$name <- entrez2gene(V(ntw1)$name)
+set.seed(1)
+layout <- umapLayout(ntw, k=13)
+cmn <- cluster_louvain(as.undirected(ntw1))
+dgt <- dgt_full[match(V(ntw1)$name, rownames(dgt_full)), , drop=FALSE]
+v_size <- sqrt(dgt[, "Betweenness"])
+v_size_offsetB <- max(v_size)/5
+v_size <- v_size+v_size_offsetB
+v_size_fB <- 20/max(v_size)
+v_size <- v_size*v_size_fB
+V(ntw1)$size <- v_size
+V(ntw1)$label.dist <- as.numeric(v_size<4)*.5
+V(ntw1)$label.cex=.8
+V(ntw1)$label.family="Helvetica"
+col <- community_colors[igraph::membership(cmn)]
+col[vname %in% names(stbFET[stbFET<=2])] <- "#CCCCCC"
+V(ntw1)$color <- col
+crosscom <- igraph::crossing(cmn, ntw1)
+tmp <- do.call(rbind, strsplit(names(crosscom), "\\|"))
+tmp <- apply(tmp, 2, function(x, genes) x %in% genes, genes=entrez2gene(names(stbFET[stbFET<2])))
+crosscom <- crosscom | (rowSums(tmp)>0)
+E(ntw1)$width <- ifelse(crosscom, .2, .4)
+E(ntw1)$color <- ifelse(crosscom, "grey70", "black")
+{
+  plot(ntw1, layout=layout, rescale=TRUE, edge.arrow.size=.1)
+  legend("bottomleft", paste0("Community ", c(seq_len(4), "-")), pch=21, pt.bg=c(community_colors, "#CCCCCC"), pt.cex=1.8, bty="n", cex=1)
+}
+cmn1 <- igraph::membership(cmn)
+cmn1[col=="#CCCCCC"] <- 0
+igraph::vertex_attr(ntw1, "community") <- cmn1
+exportCytoscape(ntw1, layout, filename="graph-all-betweenness")
+```
+
+```{r Network-plot-umap-score2, fig.dim=c(10, 10), fig.cap="Graphical representation for the MR network where nodes (MRs) were layed-out based on network connectivity, using an UMAP projection of the network connectivity matrix based on the Jaccard's distance. Only nodes with significant community association (FDR < 0.01) or *Mediator* MRs were included. Node size is proportional to the regularized out-degree. The node color represent the different communities. Intra-community edges are shown in black and inter-community edges in grey."}
+ntw1 <- induced_subgraph(ntw, names(stbFET[stbFET>2 | integrator_cat]))
+vname <- V(ntw1)$name
+set.seed(1)
+layout <- umapLayout(ntw1, k=10)
+V(ntw1)$name <- entrez2gene(V(ntw1)$name)
+cmn <- cluster_louvain(as.undirected(ntw))
+cmn <- pruneCommunity(cmn, V(ntw1)$name)
+dgt <- dgt_full[match(V(ntw1)$name, rownames(dgt_full)), , drop=FALSE]
+v_size <- sqrt(dgt[, "Reg_out-degree"])
+v_size <- v_size+v_size_offsetOD
+v_size <- v_size*v_size_fOD
+V(ntw1)$size <- v_size
+V(ntw1)$label.dist <- as.numeric(v_size<4)*.5
+V(ntw1)$label.cex=.8
+V(ntw1)$label.family="Helvetica"
+col <- community_colors[igraph::membership(cmn)]
+col[vname %in% names(stbFET[stbFET<=2])] <- "#CCCCCC"
+V(ntw1)$color <- col
+crosscom <- igraph::crossing(cmn, ntw1)
+tmp <- do.call(rbind, strsplit(names(crosscom), "\\|"))
+tmp <- apply(tmp, 2, function(x, genes) x %in% genes, genes=entrez2gene(names(stbFET[stbFET<2])))
+crosscom <- crosscom | (rowSums(tmp)>0)
+E(ntw1)$width <- ifelse(crosscom, .2, .4)
+E(ntw1)$color <- ifelse(crosscom, "grey70", "black")
+{
+  plot(ntw1, layout=layout, rescale=TRUE, edge.arrow.size=.1)
+  legend("bottomleft", paste0("Community ", c(seq_len(4), "-")), pch=21, pt.bg=c(community_colors, "#CCCCCC"), pt.cex=1.8, bty="n", cex=1)
+}
+cmn1 <- igraph::membership(cmn)
+cmn1[col=="#CCCCCC"] <- 0
+igraph::vertex_attr(ntw1, "community") <- cmn1
+exportCytoscape(ntw1, layout, filename="graph-community-outdegree")
+```
+
+```{r Network-plot-umap-score2-betweenness, fig.dim=c(10, 10), fig.cap="Graphical representation for the MR network where nodes (MRs) were layed-out based on network connectivity, using an UMAP projection of the network connectivity matrix based on the Jaccard's distance. Only nodes with significant community association (FDR < 0.01) or *Mediator* MRs were included. Node size is proportional to the network centrality (betweenness). The node color represent the different communities. Intra-community edges are shown in black and inter-community edges in grey."}
+ntw1 <- induced_subgraph(ntw, names(stbFET[stbFET>2 | integrator_cat]))
+set.seed(1)
+layout <- umapLayout(ntw1, k=10)
+V(ntw1)$name <- entrez2gene(V(ntw1)$name)
+cmn <- cluster_louvain(as.undirected(ntw))
+cmn <- pruneCommunity(cmn, V(ntw1)$name)
+dgt <- dgt_full[match(V(ntw1)$name, rownames(dgt_full)), , drop=FALSE]
+v_size <- sqrt(dgt[, "Betweenness"])
+v_size <- v_size+v_size_offsetB
+v_size <- v_size*v_size_fB
+V(ntw1)$size <- v_size
+V(ntw1)$label.dist <- as.numeric(v_size<4)*.5
+V(ntw1)$label.cex=.8
+V(ntw1)$label.family="Helvetica"
+col <- community_colors[igraph::membership(cmn)]
+col[vname %in% names(stbFET[stbFET<=2])] <- "#CCCCCC"
+V(ntw1)$color <- col
+crosscom <- igraph::crossing(cmn, ntw1)
+tmp <- do.call(rbind, strsplit(names(crosscom), "\\|"))
+tmp <- apply(tmp, 2, function(x, genes) x %in% genes, genes=entrez2gene(names(stbFET[stbFET<2])))
+crosscom <- crosscom | (rowSums(tmp)>0)
+E(ntw1)$width <- ifelse(crosscom, .2, .4)
+E(ntw1)$color <- ifelse(crosscom, "grey70", "black")
+{
+  plot(ntw1, layout=layout, rescale=TRUE, edge.arrow.size=.1)
+  legend("bottomleft", paste0("Community ", c(seq_len(4), "-")), pch=21, pt.bg=c(community_colors, "#CCCCCC"), pt.cex=1.8, bty="n", cex=1)
+}
+cmn1 <- igraph::membership(cmn)
+cmn1[col=="#CCCCCC"] <- 0
+igraph::vertex_attr(ntw1, "community") <- cmn1
+exportCytoscape(ntw1, layout, filename="graph-community-betweenness")
+```
+
+```{r export-network}
+# Exporting the network
+exportNetwork(ntw, induced_subgraph(ntw, names(stbFET[stbFET>2])), file=file.path(working_dir, "MR-network.tsv"))
+sup_files <- rbind(sup_files, c("MR-network.tsv", "MR proteins networks"))
+```
+
+### Functional gene-sets analysis for the communities
+
+#### Gene ontology analysis for the communities
+
+The enrichment of the MR silencing gene expression signatures on Gene Ontology Biological
+Processes were estimated with the aREA algorithm.
+Enrichment due to gene-sets overlap was corrected using shadow analysis [@Lefebvre2010, @Alvarez2016]
+as implemented in the VIPER package from Bioconductor.
+Multiple hypothesis testing was addressed by False Discovery Rate (FDR).
+
+```{r Integrated-plateseq-GES}
+# Integrated plateseq_vp signatures
+plateseq_ges_integ <- tmp <- integrateshRNAclones(plateseq_ges, plateseq_vp_curated_cis, sig=c(-2, -2))
+colnames(tmp) <- entrez2gene(colnames(tmp))
+exportDiffVPmat(tmp, file.path(working_dir, "Plateseq_ges_integrated.tsv"))
+sup_files <- rbind(sup_files, c("Plateseq_ges_integrated.tsv.gz", "PLATE-Seq silencing experiment integrated gene expression signatures"))
+# Removing genes not in the network
+plateseq_ges_integ <- plateseq_ges_integ[, match(V(ntw)$name, colnames(plateseq_ges_integ)), drop=FALSE]
+```
+
+```{r GO-scratch, eval=FALSE}
+# This code chunk is not executed for the sake of computational time
+EntrezGene<-ViSEAGO::EntrezGene2GO()
+myGENE2GO<-ViSEAGO::annotate("10090", EntrezGene)
+
+# TopGO analysis
+go_res <- episcTopGOanalysis(plateseq_ges_integ, myGENE2GO)
+
+# GOBP with shadow effect
+go_res <- episcGOBPshadow(plateseq_ges_integ, myGENE2GO)
+```
+
+```{r GO-load-results, warning=FALSE}
+# Pre-computed results are loaded for the sake of computational time
+go_res <- readRDS(file.path(data_dir, "gobp_results.rds"))
+go_res <- go_res[, match(V(ntw)$name, colnames(go_res)), drop=FALSE]
+go_res <- pnorm(go_res, lower.tail=FALSE)
+go_metadata <- getGOmetadata(rownames(go_res), rownames(plateseq_ges_integ))
+```
+
+The GO-BP enrichment results were integrated for each community using average integration
+of the normalized enrichment scores weighted by the community score.
+
+```{r integrate-GO-community, warning=FALSE}
+go_res_com <- integrateGOcommunity(go_res, ntw, adjust="fdr", method="mean")
+```
+
+The GO-BP enrichment results were integrated for each category of regulator
+(i.e. speaker, communicator and listener) using average integration of the
+normalized enrichment scores.
+
+```{r integrate-GO-speaker, warning=FALSE}
+go_res_spkr <- integrateGOspeaker(go_res, speaker_cat, adjust="fdr", method="mean")
+colnames(go_res_spkr) <- c("Listener", "Communicator", "Speaker")
+```
+
+The results are reported for all GO-BP categories significant in at least one
+community, or at least one speaker category at FDR < 0.01 and FDR < 0.001.
+
+```{r export-GO-results}
+exportGOtable(go_res_com, go_metadata, "GOBP-communities-table-01", pval=.01, adjust="none")
+exportGOtable(go_res_com, go_metadata, "GOBP-communities-table-001", pval=.001, adjust="none")
+sup_files <- rbind(sup_files, c("GOBP-communities-table-01.tsv", "GOBP table for communities at p < 0.01"))
+sup_files <- rbind(sup_files, c("GOBP-communities-table-001.tsv", "GOBP table for communities at p < 0.001"))
+
+exportGOtable(go_res_spkr, go_metadata, "GOBP-speaker-table", pval=.01, adjust="none")
+sup_files <- rbind(sup_files, c("GOBP-speaker-table.tsv", "GOBP table for MR protein categories"))
+```
+
+
+#### Enrichment of pathways and biological hallmarks on the communities
+
+Enrichment of gene-sets from MsigDB v7.4, including KEGG, Reactome, Biocarta, PID pathways and biological hallmarks on the MR silenging gene expression signatures was estimated with the aREA algorithm.
+Overlap between gene-sets was addressed by shadow analysis, as implemented in the VIPER package from Bioconductor.
+Multiple hypothesis testig was addressed by FDR.
+
+```{r msigdb-analysis, eval=FALSE}
+# This code chunk is not executed for the sake of computational time
+msigdb_abs <- msigdbAnalysisShadow(abs(plateseq_ges_integ))
+```
+
+```{r msigdb-precomp}
+# Pre-computed results are loaded for the sake of computational time
+msigdb_abs <- readRDS(file.path(data_dir, "msigdb_results.rds"))
+msigdb_meta <- msigdbMetadata(rownames(msigdb_abs), rownames(plateseq_ges_integ))
+```
+
+The results were then integrated for each community using average integration of
+the enrichment scores weighted by the community score.
+
+```{r msigdb-integrate-community}
+msigdb_abs_com <- integrateMsigDBcommunity(msigdb_abs, ntw, adjust="fdr", method="mean")
+```
+
+The results were also integrated for each of the MR categories (i.e. speaker, communicator and listener)
+using average integration of the normalized enrichment scores.
+
+```{r msigdb-integrate-speaker}
+msigdb_abs_spkr <- integrateMsigDBspeaker(msigdb_abs, speaker_cat, adjust="fdr", method="mean")
+colnames(msigdb_abs_spkr) <- c("Listener", "Communicator", "Speaker")
+```
+
+The results are reported for all MSigDB categories significant in at least one community,
+or at least one speaker category at p < 0.01.
+
+```{r export-MsigDB-results}
+exportMsigDBtable(msigdb_abs_com, msigdb_meta, "MsigDB-abs-communities-table", thr=.01, adjust="none", direction=FALSE)
+sup_files <- rbind(sup_files, c("MsigDB-abs-communities-table.tsv", "MsigDB table for communities not-considering direction"))
+
+exportMsigDBtable(msigdb_abs_spkr, msigdb_meta, "MsigDB-abs-speaker-table", thr=.01, adjust="none", direction=FALSE)
+sup_files <- rbind(sup_files, c("MsigDB-abs-speaker-table.tsv", "MsigDB table for MR protein categories not considering direction"))
+```
+
+
+# Activity of pluripotency MR proteins during differentiation
+
+We used the MR-focused interactome (section \@ref(mr-focused-interactome)) to estimate
+the relative activity of each of the 120 MR proteins for the 5 differentiation trajectories:
+Retinoic acid, SB431542, BMP4, mesoderm and endoderm (Fig. \@ref(fig:differentiation-mr-heatmap-120)).
+
+```{r differentiation-mr-heatmap, eval=FALSE, fig.dim=c(8, 22), fig.cap="Heatmap showing the inferred activity for the MR proteins along the 5 differentiation trajectories."}
+try(differentiationHeatmap(diff_vp_newint[rownames(diff_vp_newint) %in% rownames(ps_vp_integ), , drop=FALSE],
+                           output=file.path(working_dir, "heatmap-differentiation-data.tsv")), silent=TRUE)
+sup_files <- rbind(sup_files, c("heatmap-differentiation-data.tsv", "Data of MR activity during differentiation estimated with the curated network"))
+```
+
+```{r differentiation-mr-heatmap-120, fig.dim=c(8, 20), fig.cap="Heatmap showing the inferred activity for the MR proteins represented in the pluripotency network along the 5 differentiation trajectories."}
+try(differentiationHeatmap(diff_vp_newint[rownames(diff_vp_newint) %in% rownames(degree_tbl), , drop=FALSE],
+                           output=file.path(working_dir, "heatmap-differentiation-data-120.tsv")), silent=TRUE)
+sup_files <- rbind(sup_files, c("heatmap-differentiation-data.tsv", "Data of MR activity during differentiation estimated with the curated network"))
+```
+
+We computed an integrated meta-protein activity for each community as the weighted
+average for the relative activity of the community MRs, using as weight the score
+for community membership (Fig. \@ref(fig:differentiation-community)).
+
+```{r differentiation-community, fig.dim=c(8, 1.5), fig.cap="MR protein activity integration for each of the communities."}
+differentiationHeatmapCommunity(diff_vp_newint, ntw, output=file.path(working_dir, "heatmap-differentiation-community-data.tsv"))
+sup_files <- rbind(sup_files, c("heatmap-differentiation-community-data.tsv", "Data of MR activity during differentiation estimated with the curated network and integrated by community"))
+```
+
+```{r export diff_vp_newint}
+exportDiffVPmat(diff_vp_newint[rownames(diff_vp_newint) %in% rownames(ps_vp_integ), , drop=FALSE],
+                file.path(working_dir, "Differentiation_vpmat_MR-interactome.tsv"))
+sup_files <- rbind(sup_files, c("Differentiation_vpmat_MR-interactome.tsv.gz",
+                                "Differentiation experiment viper matrix computed using the MR-specific interactome"))
+
+```
+
+
+
+# List of supplementary files
+The following table contains a description for the supplementary files:
+
+```{r report results}
+knitr::kable(sup_files[order(sup_files[, 1]), ], row.names=FALSE, col.names = colnames(sup_files),
+             align = "ll", caption = "List of supplementary files")
+
+```
+
+```{r mock-network, message=FALSE, eval=FALSE}
+mock_ntw <- readr::read_tsv(file.path(data_dir, "mock.sif"), col_names=c("from", "sep", "to")) %>%
+    dplyr::select(from, to) %>%
+    graph.data.frame()
+dg_tbl <- degreeTable(mock_ntw)
+dg_tbl <- cbind(Node=rownames(dg_tbl), dg_tbl[, c("Reg_out-degree", "Betweenness")]) %>%
+    as_tibble
+readr::write_tsv(dg_tbl, file=file.path(working_dir, "mock-ntw-node-attr.txt"))
+```
+
+```{r mock-network-1, message=FALSE, eval=FALSE}
+mock_ntw <- readr::read_tsv(file.path(data_dir, "mock-1.sif"), col_names=c("from", "sep", "to")) %>%
+    dplyr::select(from, to) %>%
+    graph.data.frame()
+dg_tbl <- degreeTable(mock_ntw)
+dg_tbl <- cbind(Node=rownames(dg_tbl), dg_tbl[, c("Reg_out-degree", "Betweenness")]) %>%
+    as_tibble
+readr::write_tsv(dg_tbl, file=file.path(working_dir, "mock-ntw-1-node-attr.txt"))
+```
+
+
+
+# References
