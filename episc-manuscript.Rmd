@@ -72,7 +72,7 @@ sup_files <- matrix(NA, 0, 2, dimnames=list(NULL, c("File name", "Description"))
 ```
 
 ```{r setup, include=FALSE, echo=FALSE}
-knitr::opts_chunk$set(fig.align = 'center', fig.dim = c(6, 4), echo=FALSE, cache=TRUE)
+knitr::opts_chunk$set(fig.align = 'center', fig.dim = c(6, 4), echo=FALSE, cache=FALSE)
 ```
 
 # EpiSC context-specific interactome
@@ -511,7 +511,7 @@ Sequencing reads were de-multiplexed as previously described by Bush et.al [@Bus
 mapped to the mouse genome build GRCm38 (mm10) and counted at the known gene level
 with the STAR aligner [@Dobin2013].
 Summarized expression data resulting from these analyses are available from GEO
-[GSExx]().
+[GSE199855]().
 
 ```{r load-plateseq}
 load(file.path(data_dir, "episc-plateseq-silencing.rda"))

@@ -93,7 +93,7 @@ transcriptional regulators (rows) and 38 differentiation conditions (columns).
 
 6. `episc-plateseq-silencing.rda`: Raw-counts for the shRNA-mediated silencing
 of candidate MRs expression (n=798). Also available from GEO:
-[GSExxx]().
+[GSE199855](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE199855).
 
 7. `incell-primary-screen.rds`: Raw-data for the Incell-based screen for Pou5f1
 protein levels in EpiSC in response to shRNA-mediated MR silencing.
