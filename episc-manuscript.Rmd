@@ -65,6 +65,7 @@ library(ComplexHeatmap)
 library(openxlsx)
 library(ggpubr)
 library(fitdistrplus)
+library(pander)
 source(file.path(scripts_dir, "functions.r"))
 
 # Initializing the supplementary files table
@@ -1464,6 +1465,11 @@ dg_tbl <- cbind(Node=rownames(dg_tbl), dg_tbl[, c("Reg_out-degree", "Betweenness
 readr::write_tsv(dg_tbl, file=file.path(working_dir, "mock-ntw-1-node-attr.txt"))
 ```
 
+# Session Information
 
+```{r sessionInfo}
+utils::sessionInfo() %>%
+    pander::pander(compact=FALSE)
+```
 
 # References
