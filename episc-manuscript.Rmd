@@ -511,7 +511,7 @@ Sequencing reads were de-multiplexed as previously described by Bush et.al [@Bus
 mapped to the mouse genome build GRCm38 (mm10) and counted at the known gene level
 with the STAR aligner [@Dobin2013].
 Summarized expression data resulting from these analyses are available from GEO
-[GSE199855]().
+[GSE199855](https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE199855).
 
 ```{r load-plateseq}
 load(file.path(data_dir, "episc-plateseq-silencing.rda"))
@@ -1107,7 +1107,7 @@ grid.arrange(res[[1]], res[[2]], res[[3]], res[[4]], res[[5]], ncol=5)
 ```
 
 
-The violin plots below show the distribution of different network parameters, including the regularized out-degree, betweenness and degree for each of the communities (Fig. \@ref(fig:violin-community-test-FDR).
+The violin plots below show the distribution of different network parameters, including the regularized out-degree, betweenness and degree for each of the communities (Fig. \@ref(fig:violin-community-test-FDR)).
 
 ```{r violin-community-test-FDR, warning=FALSE, message=FALSE, fig.dim=c(12, 4), fig.cap="Distribution of network parameters, including regularized out-degree (A), betweenness (B) and degree (C) for ech of the communities."}
 pos <- which(stbFET>2)
