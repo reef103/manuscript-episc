@@ -489,7 +489,7 @@ The following table lists all the `r nrow(mr_table)` selected proteins, includin
 `r length(which(mr_table$Incell))` proteins selected for validation using the Incell-based
 quantification of Pou5f1 protein levels (see section below), and the
 `r length(which(mr_table$PLATEseq))` proteins selected for validation using
-expression profile by PLATE-Seq technology (Table \@ref(tab:selected-prteins-table)).
+expression profile by PLATE-Seq technology (Table \@ref(tab:selected-proteins-table)).
 
 ```{r selected-proteins-table, messages=FALSE, warning=FALSE}
 # Save results table
