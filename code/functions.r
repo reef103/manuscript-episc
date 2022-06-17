@@ -2377,7 +2377,8 @@ MRtable <- function(rpkm=NULL, exp_lh=NULL, regulon=NULL, inversion_lr=NULL, msv
             diff_sc <- diff_sc[match(genes[, 1], names(diff_sc))]
             tmp <- cbind(tmp, Pou5f1=round(incell_sc * act_integ_sign, 2), Diff_effect=round(-diff_sc * act_integ_sign, 2))
             tmp <- cbind(tmp, Pou5f1_score=round(incell_sc, 2), Diff_score=round(diff_sc, 2))
-            tmp <- cbind(tmp, FDR=signif(p.adjust(pnorm(diff_sc, lower.tail=FALSE)*2, "fdr"), 3))
+            tmp <- cbind(tmp, FDR.incell=signif(p.adjust(pnorm(incell_sc, lower.tail=FALSE)*2, "fdr"), 3))
+            tmp <- cbind(tmp, FDR.diff=signif(p.adjust(pnorm(diff_sc, lower.tail=FALSE)*2, "fdr"), 3))
             tmp <- tmp[order(as.numeric(tmp[, "Expression_lh"])<.5, -diff_sc), , drop=FALSE] 
         }
     }

@@ -73,7 +73,7 @@ sup_files <- matrix(NA, 0, 2, dimnames=list(NULL, c("File name", "Description"))
 ```
 
 ```{r setup, include=FALSE, echo=FALSE}
-knitr::opts_chunk$set(fig.align = 'center', fig.dim = c(6, 4), echo=FALSE, cache=FALSE)
+knitr::opts_chunk$set(fig.align = 'center', fig.dim = c(6, 4), echo=FALSE, cache=TRUE)
 ```
 
 # EpiSC context-specific interactome
@@ -836,6 +836,26 @@ knitr::kable(val_table, row.names=FALSE, col.names = colnames(val_table),
   align = paste0("ll", paste(rep("c", ncol(val_table)-2), collapse="")),
   caption = "List of validated master regulators and their results on loss-of-function analysis.")
 ```
+
+```{r validation-numbers}
+diff_val_pval <- p.adjust(pnorm(diff_val_score, lower.tail=FALSE)*2, "fdr")
+incell_val_pval <- p.adjust(pnorm(incell_score, lower.tail=FALSE)*2, "fdr")
+incell_val_pval_common <- incell_val_pval[match(names(diff_val_pval), names(incell_val_pval))]
+diff_incell_fet <- fisher.test(diff_val_pval<.05, incell_val_pval_common<.05, alternative="greater")
+ovl <- length(which(incell_val_pval_common<.05))
+tot <- length(diff_val_pval)
+val_n <- length(which(diff_val_pval<.05))
+diff_only <- length(which(diff_val_pval < .05 & incell_val_pval_common >= 0.05))
+```
+
+`r ovl` of `r tot` candidate MRs (`r round(100*ovl/tot)`%, p ~ `r signif(diff_incell_fet$p.value, 3)`,
+1-tailed FET) showing concordant, statistically-significant scores (FDR < 0.05, 2-tailed analysis).
+Notably, `r diff_only` candidate MRs (`r round(100*diff_only/tot)`%) had only a
+statistically-significant differentiation score but not incell Pou5f1 score, suggesting they
+may regulate primed state pluripotency in a Pou5f1-independent manner.
+In total, `r val_n` of `r tot` MRs (`r round(100*val_n/tot)`%) were validated by
+differentiation score analysis and were further investigated (green dots in Fig. \@ref(fig:diff-Pou5f1-score)).
+
 
 # Assembly of a candidate MR-focused interactome based on perturbational data and shRNA-mediated knock-down experimental data {#mr-focused-interactome}
 
