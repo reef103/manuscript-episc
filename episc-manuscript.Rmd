@@ -340,7 +340,7 @@ As it is shown by PC2, the 18h time-point for this treatment arm is potentially
 an outlier and we decided to ignore this time point for the
 SB31542 treatment for all further analysis.
 
-```{r PCA-trajecories, out.width='50%', fig.show='hold', fig.cap="Temporal trajectories for the first 3 principal components of the protein activity signatures for each of the treatments, and 2-dimensional projection of the protein activity signatures based on PCA."}
+```{r PCA-trajectories, out.width='50%', fig.show='hold', fig.cap="Temporal trajectories for the first 3 principal components of the protein activity signatures for each of the treatments, and 2-dimensional projection of the protein activity signatures based on PCA."}
 plotPCAtrajectory(diff_vp, treat="RA", main="Retinoic acid", cex.main=.9)
 plotPCAtrajectory(diff_vp, treat="SB", main="SB431542", cex.main=.9)
 plotPCAtrajectory(diff_vp, treat="B4", main="BMP4", cex.main=.9)
@@ -842,7 +842,7 @@ diff_val_pval <- p.adjust(pnorm(diff_val_score, lower.tail=FALSE)*2, "fdr")
 incell_val_pval <- p.adjust(pnorm(incell_score, lower.tail=FALSE)*2, "fdr")
 incell_val_pval_common <- incell_val_pval[match(names(diff_val_pval), names(incell_val_pval))]
 diff_incell_fet <- fisher.test(diff_val_pval<.05, incell_val_pval_common<.05, alternative="greater")
-ovl <- length(which(incell_val_pval_common<.05))
+ovl <- length(which(diff_val_pval<.05 & incell_val_pval_common<.05))
 tot <- length(diff_val_pval)
 val_n <- length(which(diff_val_pval<.05))
 diff_only <- length(which(diff_val_pval < .05 & incell_val_pval_common >= 0.05))
@@ -1151,8 +1151,18 @@ knitr::kable(ntw_params, row.names=FALSE, col.names=colnames(ntw_params), align=
 ```
 
 ```{r strong-nodes}
-n_strong_nodes <- length(V(induced_subgraph(ntw, names(stbFET[stbFET>2])))$name)
+strong_nodes <- names(stbFET[stbFET>2 | integrator_cat])
+n_strong_nodes <- length(strong_nodes)
+dg_tbl <- degreeTable(ntw)[, c(1, 4, 9), drop=FALSE]
+dg_tbl <- dg_tbl[rownames(dg_tbl) %in% strong_nodes, , drop=FALSE]
+cent_cor <- cor(dg_tbl, method="spearman")
+cent_cor_pval <- cortest(cent_cor, nrow(dg_tbl), alternative="greater")$p.value
 ```
+
+When considering only the `r n_strong_nodes` strong nodes, we observed a significant correlation
+between degree and ROD (rho = `r round(cent_cor[1, 2], 2)`, p ~ `r signif(cent_cor_pval[1, 2], 3)`),
+and between degree and betweenness (rho = `r round(cent_cor[1, 3], 2)`, p ~ `r signif(cent_cor_pval[1, 3], 3)`),
+but not between ROD and betweenness (rho = `r round(cent_cor[2, 3], 2)`, p ~ `r signif(cent_cor_pval[2, 3], 3)`).
 
 Figures \@ref(fig:Network-plot-umap) and \@ref(fig:Network-plot-umap-betweenness) show the graphs for the `r length(V(ntw)$name)` nodes.
 
