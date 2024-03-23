@@ -16,7 +16,7 @@ packages are required to execute the code in the *episc-manuscript.Rmd* file:
 - [viper](https://www.bioconductor.org/packages/release/bioc/html/viper.html)
 - [umap](https://cran.r-project.org/web/packages/umap/index.html)
 - [mixtools](https://cran.r-project.org/web/packages/mixtools/index.html)
-- [DESeq](https://bioconductor.org/packages/3.12/bioc/html/DESeq.html)
+- [DESeq](https://bioconductor.org/packages/3.10/bioc/html/DESeq.html) This package has been deprecated by Bioconductor. For convenience, the source code for version 1.38 is available under the `code` directory in this repository.
 - [limma](https://www.bioconductor.org/packages/release/bioc/html/limma.html)
 - [ggplot2](https://cran.r-project.org/web/packages/ggplot2/index.html)
 - [ggrepel](https://cran.r-project.org/web/packages/ggrepel/index.html)
