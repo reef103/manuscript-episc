@@ -3832,8 +3832,7 @@ cleanInteractomeKnownGenes <- function(reg) {
 #' @param ntw igraph network object
 #' @return Vector of community assignments
 episcCommunityAnalysis <- function(ntw) {
-    set.seed(pi)
-    community <- igraph::cluster_louvain(igraph::as.undirected(ntw), resolution = .8)
+    community <- igraph::cluster_louvain(igraph::as.undirected(ntw))
     com_membership <- igraph::membership(community)
     # Getting the saved community info
 #    tmp <- read.table(file.path(data_dir, "communities.tsv"), sep="\t", header=TRUE, as.is=TRUE)

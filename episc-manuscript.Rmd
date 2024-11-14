@@ -47,7 +47,7 @@ Marker_colors <- c(Pluripotent="#EC297B",
 #tmp <- .libPaths()
 #tmp[1] <- "~/RlibEpisc"
 #.libPaths(tmp)
-library(parallel)
+
 library(ViSEAGO)
 library(viper)
 library(umap)
@@ -1135,7 +1135,7 @@ pos <- which(stbFET>2)
 p1 <- violinCommunitiesTest(degree_tbl[, "Reg_out-degree"][pos], com_membership[pos], community_colors,
                       ylab="Regularized out-degree", xlab="Community")
 p2 <- violinCommunitiesTest(log2(degree_tbl[, "Betweenness"][pos]+1), com_membership[pos],
-                      community_colors, ylab="log2(Betweenness+1)", xlab="Community")
+                      community_colors, ylab=expression(log[2](Betweenness+1)), xlab="Community")
 p3 <- violinCommunitiesTest(degree_tbl[, "Degree"][pos], com_membership[pos], community_colors, ylab="Degree", xlab="Community")
 fig <- ggarrange(p1, p2, p3, nrow=1, labels="AUTO")
 fig
