@@ -120,21 +120,40 @@ Moreover, addition of the morphogen 12h prior to the small molecule compounds is
 associated with a reduction of the variance due to the compounds.
 However, the variance due to the compounds is retained if the morphogen is added
 12h after the compounds (Fig. \@ref(fig:optim-pca-plot)).
+The top 100 genes most strongly associated to PC2 are listed in Table \@ref(tab:pc2-assoc).
+GO-BP terms significantly (FDR < 0.01) enrichment in the gene expression signature associated with
+PC2 are listed in Table \@ref(tab:pc2_GO).
 
 ```{r optim-pca-plot, fig.cap="Projection of the pilot experiment's expression data on the first 2 principal components."}
 # Generating the plot
 plotPCApilotPerturbationsGG(pca, annot)
 ```
 
-```{r pc1-assoc}
-pc1_sig <- tmp$rotation[, "PC2"] * tmp$sdev[2]
-exportGESsignature(pc1_sig, n = 100, file = file.path(working_dir, "PC1-genes.tsv"))
+```{r pc2-assoc}
+pc2_sig <- tmp$rotation[, "PC2"] * tmp$sdev[2]
+names(pc2_sig) <- probe2entrez(names(pc2_sig), data_dir = data_dir)
+pc2_sig <- pc2_sig[!is.na(names(pc2_sig))]
+pc2_sig <- tapply(pc2_sig, names(pc2_sig), function(x) {
+  weighted.mean(x, w = abs(x), na.m = TRUE)
+})
+exportGESsignature(pc2_sig, n = 100, file = file.path(working_dir, "PC1-genes.tsv"), gz = FALSE)
+knitr::kable(tableGESsignature(pc2_sig, n = 100), row.names = FALSE, col.names = c("EntrezID", "Symbol", "Score"),
+  align = "llc", caption = "List of top 100 genes showing the strongest association to the pilot perturbational data PC2.")
 ```
 
+```{r pc2-GO}
+load(file.path(data_dir, "gobp_mm.rda"))
+go_pc2 <- episcGOBPshadow(pc2_sig, gobp_mm = gobp_mm, abs = FALSE)
+go_tbl <- GOtable(go_pc2, thr = 0.01, adjust = "fdr", pc2_sig)
+write.table(go_tbl, file = file.path(working_dir, "GO-pilotPC2.tsv"), quote = FALSE,
+  sep = "\t", row.names = FALSE, col.names = TRUE)
+knitr::kable(go_tbl, row.names = FALSE, colnames = TRUE,
+  align = "llrrcc", caption = "GO-BP terms significantly enriched in the PC2 signature (FDR < 0.01).")
+```
 
 ## Perturbational data for the EpiSC context-specific interactome
 
-```{r}
+```{r perturbation}
 load(file.path(data_dir, "episc-perturbation.rda"))
 tmp <- paste(episc_samples$Strain, episc_samples$Morphogen, episc_samples$Perturbagen, sep="-x-")
 tmp <- table(tmp)
@@ -185,7 +204,7 @@ Parameters were set to 0 DPI (data processing inequality) tolerance and MI
 
 ```{r episc-interactome, include=FALSE, echo=FALSE}
 episc_interactome <- readRDS(file.path(data_dir, "EpiSC_interactome.rds"))
-episc_interactome_cleaned<- cleanInteractomeKnownGenes(episc_interactome)
+episc_interactome_cleaned <- cleanInteractomeKnownGenes(episc_interactome)
 tfs <- length(episc_interactome_cleaned)
 targets <- length(unique(unlist(lapply(episc_interactome_cleaned,function(x) names(x$tfmode)),use.names=FALSE)))
 interactions <- sum(vapply(episc_interactome_cleaned, function(x) length(x$tfmode), numeric(1)))
@@ -283,6 +302,24 @@ the differentiation protocols (Fig. \@ref(fig:Diff-pca-plot)).
 ```{r Diff-pca-plot, fig.cap="Projection of the differentiation experiment gene expression data in 2 dimensions by PCA."}
 plotPCAdiffTimeCourse(pca)
 ```
+
+```{r pc1-assoc}
+pc1_sig <- tmp$rotation[, "PC1"] * tmp$sdev[1]
+exportGESsignature(pc1_sig, n = 100, file = file.path(working_dir, "PC1-genes.tsv"), gz = FALSE)
+knitr::kable(tableGESsignature(pc1_sig, n = 100), row.names = FALSE, col.names = c("EntrezID", "Symbol", "Score"),
+  align = "llc", caption = "List of top 100 genes showing the strongest association to the differentiation experiment PC1.")
+```
+
+```{r pc1-GO}
+load(file.path(data_dir, "gobp_mm.rda"))
+go_pc1 <- episcGOBPshadow(pc1_sig, gobp_mm = gobp_mm, abs = FALSE)
+go_tbl <- GOtable(go_pc2, thr = 0.01, adjust = "fdr", pc2_sig)
+write.table(go_tbl, file = file.path(working_dir, "GO-pilotPC2.tsv"), quote = FALSE,
+  sep = "\t", row.names = FALSE, col.names = TRUE)
+knitr::kable(go_tbl, row.names = FALSE, colnames = TRUE,
+  align = "llrrcc", caption = "GO-BP terms significantly enriched in the PC2 signature (FDR < 0.01).")
+```
+
 
 The expression likelihood for each gene was estimated by fitting a mixture of three
 gaussian distributions to the distribution of log_10_(RPKM+1) across all genes.

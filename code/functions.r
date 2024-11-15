@@ -2219,13 +2219,14 @@ exportDiffExpmat <- function(x, file, gz=TRUE) {
 #' @param gz Logical, whether to gzip the output
 #' @return None
 exportGESsignature <- function(x, file, n = Inf, gz = TRUE) {
-    x <- x[order(abs(x), decreasing = TRUE)]
-    if (n < Inf) {
-        x <- x[seq_len(n)]
+    tmp <- data.frame(EntrezID = names(x), Symbol = entrez2gene(names(x)),
+        Score = round(x, 4))
+    tmp <- tmp[!is.na(tmp$Symbol), , drop = FALSE]
+    if (n == Inf) {
+        n <- nrow(tmp)
     }
-    x <- x[order(x)]
-    tmp <- cbind(EntrezID = names(x), Symbol = entrez2gene(names(x)),
-        Score = round(x, 2))
+    tmp <- tmp[order(abs(tmp$Score), decreasing = TRUE)[seq_len(n)], , drop = FALSE]
+    tmp <- tmp[order(tmp$Score), , drop = FALSE]
     tmp[is.na(tmp)] <- ""
     if (gz) {
         file <- gzfile(paste0(file, ".gz"), open="w")
@@ -2242,13 +2243,16 @@ exportGESsignature <- function(x, file, n = Inf, gz = TRUE) {
 #' @param n Number indicating the nuber of genes to include
 #' @return data.frame
 tableGESsignature <- function(x, n = Inf) {
-        x <- x[order(abs(x), decreasing = TRUE)]
-    if (n < Inf) {
-        x <- x[seq_len(n)]
+    tmp <- data.frame(EntrezID = names(x), Symbol = entrez2gene(names(x)),
+        Score = round(x, 4))
+    tmp <- tmp[!is.na(tmp$Symbol), , drop = FALSE]
+    if (n == Inf) {
+        n <- nrow(tmp)
     }
-    x <- x[order(x)]
-    data.frame(EntrezID = names(x), Symbol = entrez2gene(names(x)),
-        Score = round(x, 2))
+    tmp <- tmp[order(abs(tmp$Score), decreasing = TRUE)[seq_len(n)], , drop = FALSE]
+    tmp <- tmp[order(tmp$Score), , drop = FALSE]
+    tmp[is.na(tmp)] <- ""
+    return(tmp)
 }
 
 #' Export the Differentiation viper matrix
@@ -3471,16 +3475,26 @@ WRowMeanSubset <- function(genes, z, stb) {
 #' 
 #' @param plateseq_ges_integ Matrix of gene expression signatures
 #' @param myGENE2GO Gene2go mapping
+#' @param gobp_mm List of GO sets
 #' 
 #' @return Matrix of NES
-episcTopGOanalysis <- function(plateseq_ges_integ, myGENE2GO) {
+episcTopGOanalysis <- function(plateseq_ges_integ, myGENE2GO = NULL, gobp_mm = NULL) {
+    if (length(myGENE2GO) > 0) {
+        gobp_mm <- myGENE2GO@BP
+    }
+    if (length(gobp_mm) == 0) {
+        stop("No GO-BP terms have been provided")
+    }
+    if (is.null(dim(plateseq_ges_integ)) | length(dim(plateseq_ges_integ)) == 1) {
+        plateseq_ges_integ <- matrix(plateseq_ges_integ, length(plateseq_ges_integ), 1, dimnames = list(names(plateseq_ges_integ), "GES"))
+    }
     go_res <- apply(plateseq_ges_integ, 2, function(x, gobp_mm) {
         sel_genes <- function(x) p.adjust(x, "fdr")<1e-3
         all_genes <- pnorm(abs(x), lower.tail=FALSE)*2
         tgo <- new("topGOdata", ontology="BP", allGenes=all_genes, geneSel=sel_genes, annot=annFUN.gene2GO, gene2GO=gobp_mm, nodeSize=10)
         res <- topGO::runTest(tgo, algorithm ="weight01", statistic = "ks")
         score(res)
-    }, gobp_mm=myGENE2GO@BP)
+    }, gobp_mm=gobp_mm)
     go_res
 }
 
@@ -3488,10 +3502,20 @@ episcTopGOanalysis <- function(plateseq_ges_integ, myGENE2GO) {
 #' 
 #' @param plateseq_ges_integ Matrix of gene expression signatures
 #' @param myGENE2GO Gene2go mapping
+#' @param gobp_mm List of GO sets
+#' @param abs Logical, whether the enrichment should be on the absolute value of the signature
 #' 
 #' @return Matrix of NES
-episcGOBPshadow <- function(plateseq_ges_integ, myGENE2GO) {
-    gobp_mm <- myGENE2GO@BP
+episcGOBPshadow <- function(plateseq_ges_integ, myGENE2GO = NULL, gobp_mm = NULL, abs = TRUE) {
+    if (length(myGENE2GO) > 0) {
+        gobp_mm <- myGENE2GO@BP
+    }
+    if (length(gobp_mm) == 0) {
+        stop("No GO-BP terms have been provided")
+    }
+    if (is.null(dim(plateseq_ges_integ)) | length(dim(plateseq_ges_integ)) == 1) {
+        plateseq_ges_integ <- matrix(plateseq_ges_integ, length(plateseq_ges_integ), 1, dimnames = list(names(plateseq_ges_integ), "GES"))
+    }
     gobp_mm <- gobp_mm[names(gobp_mm) %in% rownames(plateseq_ges_integ)]
     gobp_mm <- cbind(unlist(gobp_mm, use.names=FALSE), rep(names(gobp_mm), sapply(gobp_mm, length)))
     # Generate the gene-sets
@@ -3504,7 +3528,10 @@ episcGOBPshadow <- function(plateseq_ges_integ, myGENE2GO) {
     gobp_reg <- gobp_reg[sapply(gobp_reg, function(x) {
         length(x[["tfmode"]])
     })>=15]
-    expmat <- abs(plateseq_ges_integ)
+    expmat <- plateseq_ges_integ
+    if (abs) {
+        expmat <- abs(plateseq_ges_integ)
+    }
     #save(expmat, gobp_reg, version=2, file="rawdata4gobp.rda")
     # Enrichment analysis
     res <- apply(expmat, 2,  function(x, gobp_reg) {
@@ -3514,7 +3541,12 @@ episcGOBPshadow <- function(plateseq_ges_integ, myGENE2GO) {
         names(res) <- names(gobp_reg)
         res
     }, gobp_reg=gobp_reg)
-    res[rowSums(is.na(res))==0, , drop=FALSE]
+    if (is.null(ncol(res))) {
+        res <- res[!is.na(res)]
+    } else {
+        res <- res[rowSums(is.na(res))==0, , drop=FALSE]
+    }
+    return(res)
 }
 
 
@@ -3866,6 +3898,16 @@ cleanInteractomeKnownGenes <- function(reg) {
     reg
 }
 
+#' Map Illumina probes to entrezID
+#' 
+#' @param x Vector of probe IDs
+#' @param data_dir String indicating the data directory
+#' @return Vector of entrezIDs
+probe2entrez <- function(x, data_dir) {
+    ref <- read.table(file.path(data_dir, "mWG6v2.txt.gz"), header = TRUE, sep = "\t")
+    ref$ENTREZ_GENE_ID[match(x, ref$ProbeID)]
+}
+
 #' Community analysis
 #' 
 #' @param ntw igraph network object
@@ -3896,6 +3938,16 @@ msigdbMetadata <- function(categ, genes) {
     }, genes=genes)
     size <- vapply(msigdb, length, numeric(1))
     data.frame(Category=names(msigdb), Size=size)
+}
+
+GOtable <- function(gores, ges, thr = 0.01, adjust = "fdr") {
+    pval <- p.adjust(pnorm(abs(gores), lower.tail = FALSE) * 2, adjust)
+    go_md <- getGOmetadata(rownames(gores), names(ges))
+    tbl <- data.frame(GOID = go_md$Category, GOterm = goID2Term(go_md$Category),
+        Size = go_md$Size, Level = go_md$Level, NES = round(gores[match(go_md$Category,
+        rownames(gores)), ], 2), p.value = signif(pval[match(go_md$Category, rownames(gores))], 3))
+    tbl <- tbl[order(tbl$NES), ]
+    tbl[tbl$p.valu < thr, ]
 }
 
 #' GOBP metadata
