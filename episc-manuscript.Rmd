@@ -126,6 +126,12 @@ However, the variance due to the compounds is retained if the morphogen is added
 plotPCApilotPerturbationsGG(pca, annot)
 ```
 
+```{r pc1-assoc}
+pc1_sig <- tmp$rotation[, "PC2"] * tmp$sdev[2]
+exportGESsignature(pc1_sig, n = 100, file = file.path(working_dir, "PC1-genes.tsv"))
+```
+
+
 ## Perturbational data for the EpiSC context-specific interactome
 
 ```{r}

@@ -2212,6 +2212,45 @@ exportDiffExpmat <- function(x, file, gz=TRUE) {
     if (gz) close(file)
 }
 
+#' Export gene signature
+#' @param x Vector of gene signature
+#' @param file Filename
+#' @param n Number of genes to include
+#' @param gz Logical, whether to gzip the output
+#' @return None
+exportGESsignature <- function(x, file, n = Inf, gz = TRUE) {
+    x <- x[order(abs(x), decreasing = TRUE)]
+    if (n < Inf) {
+        x <- x[seq_len(n)]
+    }
+    x <- x[order(x)]
+    tmp <- cbind(EntrezID = names(x), Symbol = entrez2gene(names(x)),
+        Score = round(x, 2))
+    tmp[is.na(tmp)] <- ""
+    if (gz) {
+        file <- gzfile(paste0(file, ".gz"), open="w")
+    }
+    write.table(tmp, file=file, quote=FALSE, sep="\t", row.names=FALSE, col.names=TRUE)
+    if (gz) {
+        close(file)
+    }
+}
+
+#' Table of genes in a signature
+#' 
+#' @param x Vector of signature genes
+#' @param n Number indicating the nuber of genes to include
+#' @return data.frame
+tableGESsignature <- function(x, n = Inf) {
+        x <- x[order(abs(x), decreasing = TRUE)]
+    if (n < Inf) {
+        x <- x[seq_len(n)]
+    }
+    x <- x[order(x)]
+    data.frame(EntrezID = names(x), Symbol = entrez2gene(names(x)),
+        Score = round(x, 2))
+}
+
 #' Export the Differentiation viper matrix
 #' 
 #' @param x Viper matrix
