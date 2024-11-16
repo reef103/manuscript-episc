@@ -48,6 +48,7 @@ Marker_colors <- c(Pluripotent="#EC297B",
 #tmp[1] <- "~/RlibEpisc"
 #.libPaths(tmp)
 
+library(parallel)
 library(ViSEAGO)
 library(viper)
 library(umap)
@@ -136,7 +137,7 @@ pc2_sig <- pc2_sig[!is.na(names(pc2_sig))]
 pc2_sig <- tapply(pc2_sig, names(pc2_sig), function(x) {
   weighted.mean(x, w = abs(x), na.m = TRUE)
 })
-exportGESsignature(pc2_sig, n = 100, file = file.path(working_dir, "PC1-genes.tsv"), gz = FALSE)
+exportGESsignature(pc2_sig, n = 100, file = file.path(working_dir, "PC2-genes.tsv"), gz = FALSE)
 knitr::kable(tableGESsignature(pc2_sig, n = 100), row.names = FALSE, col.names = c("EntrezID", "Symbol", "Score"),
   align = "llc", caption = "List of top 100 genes showing the strongest association to the pilot perturbational data PC2.")
 ```
@@ -313,11 +314,11 @@ knitr::kable(tableGESsignature(pc1_sig, n = 100), row.names = FALSE, col.names =
 ```{r pc1-GO}
 load(file.path(data_dir, "gobp_mm.rda"))
 go_pc1 <- episcGOBPshadow(pc1_sig, gobp_mm = gobp_mm, abs = FALSE)
-go_tbl <- GOtable(go_pc2, thr = 0.01, adjust = "fdr", pc2_sig)
-write.table(go_tbl, file = file.path(working_dir, "GO-pilotPC2.tsv"), quote = FALSE,
+go_tbl <- GOtable(go_pc1, thr = 0.01, adjust = "fdr", pc1_sig)
+write.table(go_tbl, file = file.path(working_dir, "GO-pilotPC1.tsv"), quote = FALSE,
   sep = "\t", row.names = FALSE, col.names = TRUE)
 knitr::kable(go_tbl, row.names = FALSE, colnames = TRUE,
-  align = "llrrcc", caption = "GO-BP terms significantly enriched in the PC2 signature (FDR < 0.01).")
+  align = "llrrcc", caption = "GO-BP terms significantly enriched in the PC1 signature (FDR < 0.01).")
 ```
 
 
@@ -1132,6 +1133,12 @@ algorithm [@Blondel2008], as implemented in the igraph package from Bioconductor
 
 ```{r modularity}
 com_membership <- episcCommunityAnalysis(ntw)
+
+# To avoid potential issues/differences in the community results based on
+# different versions of the igraph package and associated algorithms we load
+# the pre-computed communities below
+com_membership <- readCommunityFromFile(data_dir)
+
 # Modularity
 modul <- igraph::modularity(as.undirected(ntw), com_membership)
 # Community Stability by FET analysis 
@@ -1178,7 +1185,7 @@ pos <- which(stbFET>2)
 p1 <- violinCommunitiesTest(degree_tbl[, "Reg_out-degree"][pos], com_membership[pos], community_colors,
                       ylab="Regularized out-degree", xlab="Community")
 p2 <- violinCommunitiesTest(log2(degree_tbl[, "Betweenness"][pos]+1), com_membership[pos],
-                      community_colors, ylab=expression(log[2](Betweenness+1)), xlab="Community")
+                      community_colors, ylab="log2(Betweenness+1)", xlab="Community")
 p3 <- violinCommunitiesTest(degree_tbl[, "Degree"][pos], com_membership[pos], community_colors, ylab="Degree", xlab="Community")
 fig <- ggarrange(p1, p2, p3, nrow=1, labels="AUTO")
 fig

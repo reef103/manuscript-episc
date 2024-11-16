@@ -308,8 +308,8 @@ plotPCApilotPerturbations <- function(pca, annot) {
 #' 
 #' @param pca List of PCA results with slots x and pvar
 #' @annot annot Matrix of 7 columns indicating the metadata for the pilot experiment
-plotPCApilotPerturbationsGG <- function(pca, annot) {
-    tmp <- tibble::tibble(x=pca$x[1, ], y=pca$x[2, ], Perturbagen=annot[, "perturbagen"], Condition="cpmd 24h")
+plotPCApilotPerturbationsGG <- function(pca, annot, pc = c(1, 2)) {
+    tmp <- tibble::tibble(x=pca$x[pc[1], ], y=pca$x[pc[2], ], Perturbagen=annot[, "perturbagen"], Condition="cpmd 24h")
     tmp$Perturbagen[tmp$Perturbagen=="none"] <- "Mock"
     pert <- sort(unique(tmp$Perturbagen))
     pert <- c("Mock", pert[pert != "Mock"])
@@ -317,8 +317,8 @@ plotPCApilotPerturbationsGG <- function(pca, annot) {
     tmp$Condition[annot[, "morphogen"]=="RA" & annot[, "m_time"]=="36"] <- "cpmd 24h + mrf 36h"
     tmp$Condition[annot[, "morphogen"]=="RA" & annot[, "m_time"]=="24"] <- "cpmd 36h + mrf 24h"
     ggplot(tmp, aes(x=x, y=y)) + theme_classic(base_size = 12) +
-        xlab(paste0("PC1 - Var: ",  round(pca$pvar[1]*100, 1), "%")) +
-        ylab(paste0("PC2 - Var: ", round(pca$pvar[2]*100, 1), "%")) +
+        xlab(paste0("PC", pc[1], " - Var: ",  round(pca$pvar[pc[1]]*100, 1), "%")) +
+        ylab(paste0("PC", pc[2], " - Var: ", round(pca$pvar[pc[2]]*100, 1), "%")) +
         geom_point(size=4, aes(colour=Perturbagen, shape=Condition)) +
         scale_color_manual(values=c("#666666", RColorBrewer::brewer.pal(10, "Paired")))
 }
@@ -3812,14 +3812,15 @@ plotExpmatUmap <- function(expmat, annot) {
 
 #' Plot UMAP representation of the expression matrix
 plotExpmatUmapGG <- function(expmat, annot) {
-    set.seed(1)
+    set.seed(pi)
     pos <- umap::umap(scale(t(expmat)))$layout
     morph <- as.vector(annot$Morphogen)
     morph[morph==""] <- "Mock"
     tmp <- unique(morph)
     tmp <- c("Mock", "CMAF", tmp[!(tmp %in% c("Mock", "CMAF"))])
-    tmp <- tibble::tibble(x=pos[, 1], y=pos[, 2], Morphogen=factor(morph, levels=tmp))
-    ggplot(tmp, aes(x=x, y=y, colour=Morphogen)) + theme_classic(base_size = 12) +
+    tmp <- tibble::tibble(x=pos[, 1], y=pos[, 2], Morphogen=factor(morph, levels=tmp),
+                          Strain = annot$Strain)
+    ggplot(tmp, aes(x=x, y=y, colour=Morphogen, shape = Strain)) + theme_classic(base_size = 12) +
         xlab("UMAP dimension 1") + ylab("UMAP dimension 2") + geom_point(alpha=.5, size=2)
 }
 
@@ -3945,9 +3946,9 @@ GOtable <- function(gores, ges, thr = 0.01, adjust = "fdr") {
     go_md <- getGOmetadata(rownames(gores), names(ges))
     tbl <- data.frame(GOID = go_md$Category, GOterm = goID2Term(go_md$Category),
         Size = go_md$Size, Level = go_md$Level, NES = round(gores[match(go_md$Category,
-        rownames(gores)), ], 2), p.value = signif(pval[match(go_md$Category, rownames(gores))], 3))
+        rownames(gores)), ], 2), FDR = signif(pval[match(go_md$Category, rownames(gores))], 3))
     tbl <- tbl[order(tbl$NES), ]
-    tbl[tbl$p.valu < thr, ]
+    tbl[tbl$FDR < thr, ]
 }
 
 #' GOBP metadata
@@ -4059,5 +4060,13 @@ btwThr <- function(x, pval, adjust="none", pthr=.05) {
     btw
 }
 
-
-
+#' Read community membership from file
+#' 
+#' @param path String indicating the directory
+readCommunityFromFile <- function(path) {
+    tmp <- strsplit(readLines(file.path(path, "communities.tsv"))[-1], "\t")
+    tmp <- do.call(rbind, tmp)
+    comm <- as.numeric(tmp[, 2])
+    names(comm) <- tmp[, 1]
+    return(comm)
+}
